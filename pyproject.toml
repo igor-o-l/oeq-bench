@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oeq-bench"
+version = "0.1.0.dev0"
+description = "Benchmark + correctness suite for fused equivariant TP-conv kernels (OpenEquivariance / cuEquivariance) vs e3nn, with a scatter-chunked oracle for paper-scale edge counts."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Igor Pechersky" }]
+# torch / e3nn / openequivariance are environment-provided (CUDA-arch-specific); not pinned here.
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+# install the kernels into your existing CUDA torch env, not via this package:
+#   pip install openequivariance        (needs CXXFLAGS="-include cstdint" on GCC>=14)
+#   pip install cuequivariance-torch    (pure-python 0.10.x; verified on sm_120)
+dev = ["pytest"]
+
+[project.scripts]
+oeq-bench = "oeq_bench.bench:main"
+
+[tool.setuptools]
+packages = ["oeq_bench"]
