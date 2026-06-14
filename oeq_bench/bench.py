@@ -15,8 +15,20 @@ Intended flow:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from .config import BenchConfig
+from .oracle import build_e3nn_tp, e3nn_scatter, make_graph_data
+from .profiling import build_ncu_command, parse_ncu_report, time_cuda_events
+from .report import (
+    bandwidth_gbs,
+    bytes_per_edge,
+    collect_versions,
+    edge_throughput_medges_s,
+    speedup,
+    write_json,
+)
+from .runtime import runtime_report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,14 +53,129 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def empty_result_payload(cfg: BenchConfig) -> dict:
+    return {
+        "device": None,
+        "compute_capability": None,
+        "versions": {},
+        "config": {
+            "irreps_in1": cfg.irreps_in1,
+            "irreps_in2": cfg.irreps_in2,
+            "irreps_out": cfg.irreps_out,
+            "num_nodes": cfg.num_nodes,
+            "num_edges": cfg.num_edges,
+            "chunk_edges": cfg.chunk_edges,
+            "block_size": cfg.block_size,
+        },
+        "results": {},
+        "validation": {},
+        "runtime_check": {},
+        "ncu": {},
+    }
+
+
+def _ncu_output_stem(cfg: BenchConfig, backend: str) -> Path:
+    stem = cfg.out.with_suffix("")
+    if len(cfg.backends_to_run()) == 1:
+        return stem
+    return stem.with_name(f"{stem.name}_{backend}")
+
+
+def _print_ncu_commands(cfg: BenchConfig) -> None:
+    for backend in cfg.backends_to_run():
+        print(" ".join(build_ncu_command(cfg, backend=backend, output_stem=_ncu_output_stem(cfg, backend))))
+
+
 def run_benchmark(cfg: BenchConfig) -> dict:
-    raise NotImplementedError("Task 6 wires the benchmark orchestration")
+    if cfg.profile == "ncu" and cfg.dry_run:
+        _print_ncu_commands(cfg)
+        return empty_result_payload(cfg)
+    if cfg.profile == "ncu":
+        raise RuntimeError("ncu profiling execution is not wired yet; use --dry-run to print the ncu command")
+
+    import torch
+
+    if cfg.device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required; run this benchmark on rog in the mlip env")
+
+    payload = empty_result_payload(cfg)
+    runtime = {"pass": True, "duplicates": {}, "runtimes": {}} if cfg.skip_runtime_check else runtime_report()
+    payload["runtime_check"] = runtime
+    if not runtime["pass"]:
+        raise RuntimeError(f"duplicate runtimes detected: {runtime['duplicates']}")
+
+    cc = torch.cuda.get_device_capability()
+    payload["device"] = torch.cuda.get_device_name(0)
+    payload["compute_capability"] = f"{cc[0]}.{cc[1]}"
+
+    tp_e3nn = build_e3nn_tp(cfg)
+    weight_numel = tp_e3nn.weight_numel
+    X, Y, W, src, dst = make_graph_data(cfg, weight_numel)
+
+    def e3nn_fn():
+        with torch.no_grad():
+            return e3nn_scatter(tp_e3nn, X, Y, W, src, dst, cfg.num_nodes, cfg.chunk_edges)
+
+    ms_e3nn = time_cuda_events(e3nn_fn, cfg.warmup, cfg.repeats)
+    payload["results"]["e3nn"] = {
+        "ms": round(ms_e3nn, 4),
+        "medges_s": edge_throughput_medges_s(cfg.num_edges, ms_e3nn),
+    }
+
+    extra_versions: dict[str, str | None] = {}
+    validation: dict = {}
+    for backend in cfg.backends_to_run():
+        if backend == "oeq":
+            from .backends.oeq import build_oeq_conv, version
+            from .validation import validate_oeq
+
+            problem, conv = build_oeq_conv(cfg)
+            if problem.weight_numel != weight_numel:
+                raise RuntimeError(f"weight layout mismatch: e3nn={weight_numel}, oeq={problem.weight_numel}")
+            validation = validate_oeq(tp_e3nn, conv, X, Y, W, src, dst, cfg) if cfg.validate else {}
+            payload["validation"] = validation
+            if cfg.validate and (validation.get("fwd_ok") is not True or validation.get("grad_ok") is not True):
+                write_json(cfg.out, payload)
+                raise RuntimeError(f"validation failed: {validation}")
+            rows, cols = (dst, src) if validation.get("rows_is_dst", True) else (src, dst)
+
+            def fn():
+                with torch.no_grad():
+                    return conv.forward(X.detach(), Y, W, rows, cols)
+
+            ms = time_cuda_events(fn, cfg.warmup, cfg.repeats)
+            bpe = bytes_per_edge(
+                tp_e3nn.irreps_in1.dim,
+                tp_e3nn.irreps_in2.dim,
+                weight_numel,
+                tp_e3nn.irreps_out.dim,
+            )
+            payload["results"]["oeq"] = {
+                "ms": round(ms, 4),
+                "medges_s": edge_throughput_medges_s(cfg.num_edges, ms),
+                "bw_gbs": bandwidth_gbs(bpe, cfg.num_edges, ms),
+                "bw_pct_peak": round(100.0 * bandwidth_gbs(bpe, cfg.num_edges, ms) / cfg.bw_peak_gbs, 3),
+            }
+            payload["results"]["speedup_oeq_vs_e3nn"] = speedup(ms_e3nn, ms)
+            extra_versions["oeq"] = version()
+        if backend == "cueq":
+            from .backends.cueq import run_smoke, version
+
+            payload["results"]["cueq"] = run_smoke(cfg)
+            extra_versions["cueq"] = version()
+
+    payload["validation"] = validation
+    payload["versions"] = collect_versions(extra_versions)
+    write_json(cfg.out, payload)
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
     cfg = BenchConfig.from_args(build_parser().parse_args(argv))
     if cfg.dry_run:
         print(cfg)
+        if cfg.profile == "ncu":
+            run_benchmark(cfg)
         return 0
     run_benchmark(cfg)
     return 0
