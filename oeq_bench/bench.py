@@ -202,8 +202,9 @@ def _run_ncu_profile(cfg: BenchConfig) -> dict:
         child_json = ncu_child_json_path(output_stem)
         child_payload = _load_ncu_child_payload(child_json, backend)
         _merge_ncu_child_payload(payload, child_payload)
+        target_kernel = child_payload.get("kernel_config", {}).get(backend, {})
         payload["ncu"][backend] = {
-            **parse_ncu_report(str(report_path)),
+            **parse_ncu_report(str(report_path), target_kernel=target_kernel),
             "report_path": str(report_path),
             "benchmark_json": str(child_json),
             "command": execution["command"],

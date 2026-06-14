@@ -12,3 +12,26 @@ def test_build_tuning_report_selects_fastest_config():
         ],
     )
     assert report["recommended"] == {"block_size": 256, "l1_carveout": 0}
+
+
+def test_build_tuning_report_marks_ineffective_requested_knobs():
+    report = build_tuning_report(
+        architecture="sm_120",
+        device="RTX 5080 Laptop GPU",
+        configs=[
+            {
+                "block_size": 128,
+                "l1_carveout": 0,
+                "medges_s": 32.2,
+                "bw_pct": 57.2,
+                "requested_block_size_effective": False,
+            }
+        ],
+    )
+
+    assert report["fastest_request"] == {"block_size": 128, "l1_carveout": 0}
+    assert report["recommended"] == {
+        "block_size": None,
+        "l1_carveout": None,
+        "effective": False,
+    }

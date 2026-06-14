@@ -65,7 +65,7 @@ publish per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (
 - device: NVIDIA GeForce RTX 5080 Laptop GPU, compute capability 12.0, torch 2.12.0+cu132, CUDA 13.2, e3nn 0.6.0, OEQ 0.6.6
 - validation: PASS (`fwd_ok=true`, `grad_ok=true`, fwd err `9.5367431640625e-06`, grad err `9.5367431640625e-06`, rows=dst/cols=src)
 - runtime check: PASS (`libgomp.so.1` from torch and `libopenblasp-r0.3.33.so` from the `mlip` env; no duplicates or import errors)
-- speedup: e3nn `61.8381 ms`, OEQ `6.0519 ms`, OEQ/e3nn speedup `10.218x` for the fastest 200K-edge cuda-events sweep point
-- bandwidth: OEQ `526.64 GB/s`, `58.777%` of 896 GB/s measured peak
+- speedup: e3nn `62.3764 ms`, OEQ `6.0814 ms`, OEQ/e3nn speedup `10.257x` in the refreshed `l13_results.json` e3nn 0.6.0 run
+- bandwidth: OEQ `524.09 GB/s`, `58.492%` of 896 GB/s measured peak
 - launch config: requested `--block-size 128`, actual OEQ forward config `60` blocks, `192` threads, `6` warps/block, `74112` bytes shared memory; the requested block size is not effective in OEQ 0.6.6's public constructor.
-- ncu status: `--profile ncu` ran the generated command, retried successfully with `sudo -n ncu`, wrote `sm120_e3nn060_bs128_ncu.ncu-rep`, imported counters with `ncu --import ... --csv --page raw`, and wrote parsed metrics under `payload["ncu"]["oeq"]`: occupancy `0.9482`, DRAM throughput `84.666647%`, L2 hit rate `0.973`, stall reason `long_scoreboard`.
+- ncu status: `--profile ncu` ran the generated command, retried successfully with `sudo -n ncu`, wrote `sm120_e3nn060_bs128_ncu.ncu-rep`, imported counters with `ncu --import ... --csv --page raw`, selected the OEQ main `forward(... ConvData ...)` row (ID `945`, grid `(60, 1, 1)`, block `(192, 1, 1)`), and wrote parsed metrics under `payload["ncu"]["oeq"]`: occupancy `0.1221`, DRAM throughput `84.294922%`, L2 hit rate `0.245`, stall reason `long_scoreboard`.

@@ -37,7 +37,7 @@ def time_wall(fn: Callable[[], object], warmup: int, repeats: int) -> float:
 
 def build_tuning_report(architecture: str, device: str, configs: list[dict]) -> dict:
     winner = max(configs, key=lambda row: row["medges_s"])
-    return {
+    report = {
         "architecture": architecture,
         "device": device,
         "configs_tested": configs,
@@ -46,6 +46,14 @@ def build_tuning_report(architecture: str, device: str, configs: list[dict]) -> 
             "l1_carveout": winner["l1_carveout"],
         },
     }
+    if winner.get("requested_block_size_effective") is False:
+        report["fastest_request"] = dict(report["recommended"])
+        report["recommended"] = {
+            "block_size": None,
+            "l1_carveout": None,
+            "effective": False,
+        }
+    return report
 
 
 def ncu_child_json_path(output_stem: Path) -> Path:
@@ -90,10 +98,9 @@ def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
     ]
 
 
-def _max_numeric_metrics(csv_text: str) -> dict[str, float]:
-    """Collapse duplicate ncu metric rows to best observed target-kernel values."""
-    rows = csv.DictReader(StringIO(csv_text))
-    if rows.fieldnames and "Metric Name" not in rows.fieldnames:
+def _max_numeric_metrics(rows: list[dict], fieldnames: list[str] | None) -> dict[str, float]:
+    """Collapse duplicate ncu metric rows when no target launch is available."""
+    if fieldnames and "Metric Name" not in fieldnames:
         return _max_wide_numeric_metrics(rows)
     values: dict[str, float] = {}
     for row in rows:
@@ -108,18 +115,71 @@ def _max_numeric_metrics(csv_text: str) -> dict[str, float]:
     return values
 
 
-def _max_wide_numeric_metrics(rows: csv.DictReader) -> dict[str, float]:
+def _max_wide_numeric_metrics(rows: list[dict]) -> dict[str, float]:
     values: dict[str, float] = {}
     for row in rows:
-        for name, raw_value in row.items():
-            if not name:
-                continue
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError):
-                continue
+        for name, value in _wide_numeric_metrics(row).items():
             values[name] = max(value, values.get(name, value))
     return values
+
+
+def _wide_numeric_metrics(row: dict) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for name, raw_value in row.items():
+        if not name:
+            continue
+        try:
+            values[name] = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _parse_dim3(value: str) -> tuple[int, int, int] | None:
+    try:
+        parts = [int(part.strip()) for part in value.strip().strip("()").split(",")]
+    except (AttributeError, ValueError):
+        return None
+    if len(parts) != 3:
+        return None
+    return parts[0], parts[1], parts[2]
+
+
+def _target_forward_config(target_kernel: dict | None) -> dict:
+    if not target_kernel:
+        return {}
+    forward = target_kernel.get("forward")
+    return forward if isinstance(forward, dict) else target_kernel
+
+
+def _row_matches_target_launch(row: dict, target_kernel: dict | None) -> bool:
+    target = _target_forward_config(target_kernel)
+    if not target:
+        return False
+    grid = _parse_dim3(row.get("Grid Size", ""))
+    block = _parse_dim3(row.get("Block Size", ""))
+    if grid is None or block is None:
+        return False
+    if target.get("num_blocks") is not None and grid[0] != int(target["num_blocks"]):
+        return False
+    if target.get("num_threads") is not None and block[0] != int(target["num_threads"]):
+        return False
+    return True
+
+
+def _is_main_oeq_forward(row: dict) -> bool:
+    name = row.get("Kernel Name", "")
+    return name.startswith("forward(") and "ConvData" in name
+
+
+def _select_target_kernel_row(rows: list[dict], target_kernel: dict | None) -> tuple[dict, int, str]:
+    candidates = [row for row in rows if _row_matches_target_launch(row, target_kernel)]
+    if not candidates:
+        raise ValueError(f"ncu target kernel not found for launch config: {target_kernel}")
+    main_forward = [row for row in candidates if _is_main_oeq_forward(row)]
+    if main_forward:
+        return main_forward[-1], len(candidates), "last_matching_oeq_forward"
+    return candidates[-1], len(candidates), "last_matching_launch"
 
 
 def _first_metric(values: dict[str, float], names: tuple[str, ...], default: float | None = 0.0) -> float | None:
@@ -129,8 +189,7 @@ def _first_metric(values: dict[str, float], names: tuple[str, ...], default: flo
     return default
 
 
-def parse_ncu_csv_text(csv_text: str) -> dict:
-    values = _max_numeric_metrics(csv_text)
+def _summarize_ncu_metrics(values: dict[str, float]) -> dict:
     dram = _first_metric(
         values,
         (
@@ -171,7 +230,30 @@ def parse_ncu_csv_text(csv_text: str) -> dict:
     }
 
 
-def parse_ncu_report(ncu_rep_path: str) -> dict:
+def parse_ncu_csv_text(csv_text: str, target_kernel: dict | None = None) -> dict:
+    reader = csv.DictReader(StringIO(csv_text))
+    rows = list(reader)
+    selected_kernel = None
+    if target_kernel and reader.fieldnames and "Metric Name" not in reader.fieldnames:
+        selected_row, candidate_count, strategy = _select_target_kernel_row(rows, target_kernel)
+        values = _wide_numeric_metrics(selected_row)
+        selected_kernel = {
+            "id": selected_row.get("ID"),
+            "name": selected_row.get("Kernel Name"),
+            "grid_size": selected_row.get("Grid Size"),
+            "block_size": selected_row.get("Block Size"),
+            "candidate_count": candidate_count,
+            "selection_strategy": strategy,
+        }
+    else:
+        values = _max_numeric_metrics(rows, reader.fieldnames)
+    metrics = _summarize_ncu_metrics(values)
+    if selected_kernel is not None:
+        metrics["selected_kernel"] = selected_kernel
+    return metrics
+
+
+def parse_ncu_report(ncu_rep_path: str, target_kernel: dict | None = None) -> dict:
     command = ["ncu", "--import", ncu_rep_path, "--csv", "--page", "raw"]
     try:
         proc = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -181,7 +263,7 @@ def parse_ncu_report(ncu_rep_path: str) -> dict:
             f"ncu import failed for report {ncu_rep_path} with exit {exc.returncode}: {output}"
         ) from exc
     try:
-        return parse_ncu_csv_text(proc.stdout)
+        return parse_ncu_csv_text(proc.stdout, target_kernel=target_kernel)
     except Exception as exc:
         raise RuntimeError(f"ncu CSV parse failed for report {ncu_rep_path}: {exc}") from exc
 

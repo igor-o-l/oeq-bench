@@ -66,6 +66,43 @@ def test_parse_ncu_csv_text_extracts_wide_raw_metrics():
     assert parsed["stall_reason"] == "long_scoreboard"
 
 
+def test_parse_ncu_csv_text_filters_wide_rows_to_target_oeq_kernel():
+    csv_text = "\n".join(
+        [
+            (
+                '"ID","Kernel Name","Grid Size","Block Size",'
+                '"gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",'
+                '"sm__warps_active.avg.pct_of_peak_sustained_active","lts__t_sector_hit_rate.pct",'
+                '"smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio",'
+                '"smsp__average_warps_issue_stalled_no_instruction_per_issue_active.ratio"'
+            ),
+            '"12","void at::_scatter_gather_elementwise_kernel","(1024, 1, 1)","(128, 1, 1)","99.0","94.8","97.3","0.2","0.1"',
+            '"945","forward(float *, float *, float *, float *, ConvData, void *)","(60, 1, 1)","(192, 1, 1)","84.294922","12.208787","24.497295","5.674761","0.022091"',
+            '"946","fixup_forward(void *, float *)","(60, 1, 1)","(192, 1, 1)","0.089250","11.936230","91.587302","0.0","86.580556"',
+        ]
+    )
+
+    parsed = parse_ncu_csv_text(
+        csv_text,
+        target_kernel={
+            "forward": {
+                "num_blocks": 60,
+                "num_threads": 192,
+            }
+        },
+    )
+
+    assert parsed["dram_throughput_pct"] == 84.294922
+    assert parsed["achieved_occupancy"] == 0.1221
+    assert parsed["l2_hit_rate"] == 0.245
+    assert parsed["stall_reason"] == "long_scoreboard"
+    assert parsed["selected_kernel"]["id"] == "945"
+    assert parsed["selected_kernel"]["grid_size"] == "(60, 1, 1)"
+    assert parsed["selected_kernel"]["block_size"] == "(192, 1, 1)"
+    assert parsed["selected_kernel"]["candidate_count"] == 2
+    assert parsed["selected_kernel"]["name"].startswith("forward(")
+
+
 def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
     calls = []
 

@@ -59,16 +59,18 @@ def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp
         return {"command": command, "used_sudo": False}
 
     monkeypatch.setattr(bench, "run_ncu_command", fake_run_ncu_command)
-    monkeypatch.setattr(
-        bench,
-        "parse_ncu_report",
-        lambda path: {
+    parse_calls = []
+
+    def fake_parse_ncu_report(path, target_kernel=None):
+        parse_calls.append((path, target_kernel))
+        return {
             "achieved_occupancy": 0.82,
             "dram_throughput_pct": 67.4,
             "l2_hit_rate": 0.45,
             "stall_reason": "memory_dependency",
-        },
-    )
+        }
+
+    monkeypatch.setattr(bench, "parse_ncu_report", fake_parse_ncu_report)
 
     out = tmp_path / "profile.json"
     payload = bench.run_benchmark(BenchConfig(profile="ncu", out=out))
@@ -78,6 +80,7 @@ def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp
     assert backend == "oeq"
     assert output_stem == tmp_path / "profile"
     assert command[:4] == ["ncu", "--set", "full", "--target-processes"]
+    assert parse_calls == [(str(tmp_path / "profile.ncu-rep"), {})]
     assert payload["results"]["oeq"] == {"ms": 1.25}
     assert payload["versions"] == {"torch": "fake"}
     assert payload["ncu"]["oeq"]["dram_throughput_pct"] == 67.4
@@ -98,11 +101,18 @@ def test_ncu_profile_both_backends_uses_distinct_reports(tmp_path, monkeypatch):
         child_json = bench.ncu_child_json_path(output_stem)
         child_payload = bench.empty_result_payload(BenchConfig(backend=backend, out=child_json))
         child_payload["results"][backend] = {"ms": 1.0 if backend == "oeq" else 2.0}
+        child_payload["kernel_config"][backend] = {"forward": {"num_threads": 192}}
         child_json.write_text(json.dumps(child_payload))
         return {"command": command, "used_sudo": backend == "cueq"}
 
     monkeypatch.setattr(bench, "run_ncu_command", fake_run_ncu_command)
-    monkeypatch.setattr(bench, "parse_ncu_report", lambda path: {"dram_throughput_pct": 50.0})
+    parse_targets = {}
+
+    def fake_parse(path, target_kernel=None):
+        parse_targets[path] = target_kernel
+        return {"dram_throughput_pct": 50.0}
+
+    monkeypatch.setattr(bench, "parse_ncu_report", fake_parse)
 
     out = tmp_path / "profile.json"
     payload = bench.run_benchmark(BenchConfig(profile="ncu", backend="both", out=out))
@@ -113,6 +123,7 @@ def test_ncu_profile_both_backends_uses_distinct_reports(tmp_path, monkeypatch):
     assert payload["ncu"]["oeq"]["report_path"] == str(tmp_path / "profile_oeq.ncu-rep")
     assert payload["ncu"]["cueq"]["report_path"] == str(tmp_path / "profile_cueq.ncu-rep")
     assert payload["ncu"]["cueq"]["used_sudo"] is True
+    assert parse_targets[str(tmp_path / "profile_oeq.ncu-rep")] == {"forward": {"num_threads": 192}}
 
 
 def test_ncu_profile_fails_when_report_is_missing(tmp_path, monkeypatch):
