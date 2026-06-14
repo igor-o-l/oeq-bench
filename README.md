@@ -24,6 +24,17 @@ pip install -e .
 oeq-bench --irreps "128x0e+128x1o+128x2e" --num-edges 200000 --chunk-edges 16384
 ```
 
+## OpenEquivariance on GCC 14 / CUDA 13
+
+OEQ 0.6.x vendors `json11`, which can fail under GCC 14 because `uint8_t` is used without an explicit `<cstdint>` include. Use the installer wrapper in the target env:
+
+```bash
+cd external/oeq-bench
+pixi run -e mlip bash scripts/install_oeq.sh
+```
+
+The wrapper only sets `CXXFLAGS="-include cstdint"` for the build and then imports `openequivariance` to verify the install. The root `pixi.toml` also sets this activation variable for the Linux `mlip` env.
+
 ## cuEquivariance
 
 Install the PyTorch frontend plus CUDA ops into the existing `mlip` env; keep the pinned torch wheel:
