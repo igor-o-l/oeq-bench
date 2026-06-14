@@ -35,6 +35,19 @@ def time_wall(fn: Callable[[], object], warmup: int, repeats: int) -> float:
     return float((time.perf_counter() - t0) * 1e3 / repeats)
 
 
+def build_tuning_report(architecture: str, device: str, configs: list[dict]) -> dict:
+    winner = max(configs, key=lambda row: row["medges_s"])
+    return {
+        "architecture": architecture,
+        "device": device,
+        "configs_tested": configs,
+        "recommended": {
+            "block_size": winner["block_size"],
+            "l1_carveout": winner["l1_carveout"],
+        },
+    }
+
+
 def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
     return [
         "ncu",
