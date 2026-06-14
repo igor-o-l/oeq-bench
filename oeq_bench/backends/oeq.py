@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from . import build_instructions
 
 
@@ -17,7 +19,18 @@ def build_oeq_conv(cfg):
         shared_weights=False,
         internal_weights=False,
     )
-    conv = oeq.TensorProductConv(problem, deterministic=False)
+    if "block_size" not in inspect.signature(oeq.TensorProductConv).parameters:
+        version = getattr(oeq, "__version__", "unknown")
+        raise RuntimeError(
+            "oeq-bench block-size tuning requires an OpenEquivariance build whose "
+            f"TensorProductConv constructor accepts block_size; found version {version!r}. "
+            "Install the MLIPs external/OpenEquivariance fork or use a compatible OEQ release."
+        )
+    conv = oeq.TensorProductConv(
+        problem,
+        deterministic=False,
+        block_size=cfg.block_size,
+    )
     return problem, conv
 
 
@@ -35,10 +48,11 @@ def _launch_config_dict(schedule) -> dict:
 
 
 def describe_oeq_kernel(conv, cfg) -> dict:
+    forward = _launch_config_dict(conv.forward_schedule)
     return {
         "requested_block_size": cfg.block_size,
-        "requested_block_size_effective": False,
-        "forward": _launch_config_dict(conv.forward_schedule),
+        "requested_block_size_effective": forward["num_threads"] == cfg.block_size,
+        "forward": forward,
         "kernel_hash": conv.hash,
     }
 

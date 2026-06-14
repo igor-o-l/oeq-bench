@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--chunk-edges", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
     parser.add_argument("--warmup", type=int, default=0)
-    parser.add_argument("--block-size", type=int, default=256)
+    parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     return run_single(

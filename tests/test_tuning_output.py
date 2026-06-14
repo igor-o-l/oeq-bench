@@ -6,12 +6,12 @@ def test_build_tuning_report_selects_fastest_config():
         architecture="sm_120",
         device="RTX 5080 Laptop GPU",
         configs=[
-            {"block_size": 128, "l1_carveout": 0, "medges_s": 28.5, "bw_pct": 52.1},
-            {"block_size": 256, "l1_carveout": 0, "medges_s": 32.2, "bw_pct": 57.2},
-            {"block_size": 512, "l1_carveout": 0, "medges_s": 30.1, "bw_pct": 54.8},
+            {"block_size": 128, "l1_carveout": None, "medges_s": 45.887, "bw_pct": 81.613},
+            {"block_size": 256, "l1_carveout": None, "medges_s": 26.043, "bw_pct": 46.320},
+            {"block_size": 512, "l1_carveout": None, "medges_s": 23.552, "bw_pct": 41.890},
         ],
     )
-    assert report["recommended"] == {"block_size": 256, "l1_carveout": 0}
+    assert report["recommended"] == {"block_size": 128, "l1_carveout": None}
 
 
 def test_build_tuning_report_marks_ineffective_requested_knobs():

@@ -18,6 +18,7 @@ def test_default_config_matches_spec3_shape():
     assert cfg.validate is False
     assert cfg.profile == "cuda-events"
     assert cfg.out == Path("oeq_bench_results.json")
+    assert cfg.block_size == 128
 
 
 def test_config_from_namespace_translates_cli_aliases():

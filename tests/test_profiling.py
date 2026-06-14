@@ -77,8 +77,8 @@ def test_parse_ncu_csv_text_filters_wide_rows_to_target_oeq_kernel():
                 '"smsp__average_warps_issue_stalled_no_instruction_per_issue_active.ratio"'
             ),
             '"12","void at::_scatter_gather_elementwise_kernel","(1024, 1, 1)","(128, 1, 1)","99.0","94.8","97.3","0.2","0.1"',
-            '"945","forward(float *, float *, float *, float *, ConvData, void *)","(60, 1, 1)","(192, 1, 1)","84.294922","12.208787","24.497295","5.674761","0.022091"',
-            '"946","fixup_forward(void *, float *)","(60, 1, 1)","(192, 1, 1)","0.089250","11.936230","91.587302","0.0","86.580556"',
+            '"945","forward(float *, float *, float *, float *, ConvData, void *)","(60, 1, 1)","(128, 1, 1)","82.268618","8.241991","14.290287","4.882671","0.020053"',
+            '"946","fixup_forward(void *, float *)","(60, 1, 1)","(128, 1, 1)","0.088500","8.001122","91.587302","0.0","86.580556"',
         ]
     )
 
@@ -87,18 +87,18 @@ def test_parse_ncu_csv_text_filters_wide_rows_to_target_oeq_kernel():
         target_kernel={
             "forward": {
                 "num_blocks": 60,
-                "num_threads": 192,
+                "num_threads": 128,
             }
         },
     )
 
-    assert parsed["dram_throughput_pct"] == 84.294922
-    assert parsed["achieved_occupancy"] == 0.1221
-    assert parsed["l2_hit_rate"] == 0.245
+    assert parsed["dram_throughput_pct"] == 82.268618
+    assert parsed["achieved_occupancy"] == 0.0824
+    assert parsed["l2_hit_rate"] == 0.1429
     assert parsed["stall_reason"] == "long_scoreboard"
     assert parsed["selected_kernel"]["id"] == "945"
     assert parsed["selected_kernel"]["grid_size"] == "(60, 1, 1)"
-    assert parsed["selected_kernel"]["block_size"] == "(192, 1, 1)"
+    assert parsed["selected_kernel"]["block_size"] == "(128, 1, 1)"
     assert parsed["selected_kernel"]["candidate_count"] == 2
     assert parsed["selected_kernel"]["name"].startswith("forward(")
 

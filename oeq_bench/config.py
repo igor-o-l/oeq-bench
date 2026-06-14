@@ -23,7 +23,7 @@ class BenchConfig:
     rtol: float = 1e-4
     atol: float = 1e-4
     bw_peak_gbs: float = 896.0
-    block_size: int = 256
+    block_size: int = 128
     dtype: str = "float32"
     device: str = "cuda"
 
