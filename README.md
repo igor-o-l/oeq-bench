@@ -24,7 +24,22 @@ pip install -e .
 oeq-bench --irreps "128x0e+128x1o+128x2e" --num-edges 200000 --chunk-edges 16384
 ```
 
+## cuEquivariance
+
+Install the PyTorch frontend plus CUDA ops into the existing `mlip` env; keep the pinned torch wheel:
+
+```bash
+pixi run -e mlip pip install cuequivariance-torch cuequivariance-ops-torch-cu13
+# For CUDA-12 torch environments instead:
+pixi run -e mlip pip install cuequivariance-torch cuequivariance-ops-torch-cu12
+```
+
+`oeq-bench --backend cueq` first runs a `cuequivariance_torch.Linear` smoke check and constructs the documented
+channelwise tensor-product `SegmentedPolynomial`. The OEQ backend remains the decision-grade TP-conv path until
+cuEq's graph scatter path is validated against the same e3nn oracle.
+
 ## Status
-On rog (sm_120): OEQ 0.6.6 beat chunked-e3nn 8.4× @ 200K edges, fwd+grad validated. TODO: cuEquivariance
-backend, OEQ GCC14/CUDA13 build-fix PR (`-include cstdint`), Nsight roofline (needs `ncu` unblock), publish
-per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
+On rog (sm_120): OEQ 0.6.6 beat chunked-e3nn 8.4× @ 200K edges, fwd+grad validated. cuEquivariance has a smoke
+wrapper and channelwise tensor-product constructor, but not yet the decision-grade graph scatter benchmark. TODO:
+OEQ GCC14/CUDA13 build-fix PR (`-include cstdint`), Nsight roofline (needs `ncu` unblock), publish per-arch
+numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
