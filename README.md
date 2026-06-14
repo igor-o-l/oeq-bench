@@ -52,14 +52,14 @@ cuEq's graph scatter path is validated against the same e3nn oracle.
 ## Status
 On rog (sm_120): OEQ 0.6.6 beat chunked-e3nn 8.4× @ 200K edges, fwd+grad validated. cuEquivariance has a smoke
 wrapper and channelwise tensor-product constructor, but not yet the decision-grade graph scatter benchmark. TODO:
-OEQ GCC14/CUDA13 build-fix PR (`-include cstdint`), Nsight roofline (needs `ncu` unblock), publish per-arch
-numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
+OEQ GCC14/CUDA13 build-fix PR (`-include cstdint`), Nsight roofline counters, publish per-arch numbers. Submit
+to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
 
 ## Spec 3 Verification (2026-06-14)
 
-- command: `pixi run -e mlip python -m pytest src/tests -q` from MLIPs root -> `10 passed in 0.66s`
-- command: `PYTHONDONTWRITEBYTECODE=1 ../../.pixi/envs/default/bin/python -m pytest tests -q` from `external/oeq-bench` -> `36 passed, 5 skipped in 0.03s`
-- command: `bash scripts/test_spec3_e2e.sh` from MLIPs root -> `Spec 3 smoke: NVIDIA GeForce RTX 5080 Laptop GPU 99.404`
+- command: `pixi run -e mlip python -m pytest src/tests -q` from MLIPs root -> `10 passed in 0.68s`
+- command: `PYTHONDONTWRITEBYTECODE=1 ../../.pixi/envs/default/bin/python -m pytest tests -q` from `external/oeq-bench` -> `45 passed, 5 skipped in 0.05s`
+- command: `bash scripts/test_spec3_e2e.sh` from MLIPs root -> `Spec 3 smoke: NVIDIA GeForce RTX 5080 Laptop GPU 110.062`
 - command: `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 pixi run -e mlip oeq-bench --irreps "128x0e+128x1o+128x2e" --irreps-sh "0e+1o+2e+3o" --num-nodes 12500 --num-edges 200000 --chunk-edges 16384 --backend oeq --validate --profile cuda-events --repeats 20 --out experiments/labs/L13-oeq-fused-tp-conv-benchmark/l13_results.json`
 - git SHA: pre-evidence/run SHAs were MLIPs `21ff556a4271548dc71cf3c2aae35eb54b3d1468` and oeq-bench `c42904542908c50a8ed4cef3504f19230b9129a5`
 - device: NVIDIA GeForce RTX 5080 Laptop GPU, compute capability 12.0, torch 2.12.0+cu132, CUDA 13.2, e3nn 0.4.4, OEQ 0.6.6
@@ -67,4 +67,4 @@ numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
 - runtime check: PASS (`libgomp.so.1` from torch and `libopenblasp-r0.3.33.so` from the `mlip` env; no duplicates or import errors)
 - speedup: e3nn `51.3818 ms`, OEQ `6.0765 ms`, OEQ/e3nn speedup `8.456x`
 - bandwidth: OEQ `524.509 GB/s`, `58.539%` of 896 GB/s measured peak
-- ncu status: dry-run printed `ncu --set full --target-processes all -o experiments/labs/L13-oeq-fused-tp-conv-benchmark/ncu_profile/oeq_fwd ...`; real `--profile ncu` is blocked by `RuntimeError("ncu profiling execution is not wired yet; use --dry-run to print the ncu command")`, so sudo profiler fallback was not applicable.
+- ncu status: `--profile ncu --dry-run` prints the Nsight Compute command; real `--profile ncu` now runs that command, expects `<out-stem>.ncu-rep`, imports counters with `ncu --import ... --csv --page raw`, and writes parsed metrics under `payload["ncu"][backend]`. A tiny live smoke produced `/tmp/oeq_ncu_final2.ncu-rep` via `sudo -n ncu` and parsed occupancy `0.3183`, DRAM throughput `2.762724%`, L2 hit rate `0.923`, stall reason `no_instruction`. If non-root profiler counters are blocked, the launcher retries once with `sudo -n ncu`; persistent `ERR_NVGPUCTRPERM` still needs `NVreg_RestrictProfilingToAdminUsers=0` or a manual sudo run.

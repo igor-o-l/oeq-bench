@@ -15,11 +15,15 @@ Intended flow:
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from .config import BenchConfig
 from .oracle import build_e3nn_tp, e3nn_scatter, make_graph_data
-from .profiling import build_ncu_command, parse_ncu_report, time_cuda_events
+from .profiling import build_ncu_command, ncu_child_json_path, parse_ncu_report, time_cuda_events
 from .report import (
     bandwidth_gbs,
     bytes_per_edge,
@@ -86,12 +90,135 @@ def _print_ncu_commands(cfg: BenchConfig) -> None:
         print(" ".join(build_ncu_command(cfg, backend=backend, output_stem=_ncu_output_stem(cfg, backend))))
 
 
+def _process_error_text(exc: subprocess.CalledProcessError) -> str:
+    return "\n".join(str(part) for part in (exc.stdout, exc.stderr) if part)
+
+
+def _is_ncu_permission_error(exc: subprocess.CalledProcessError) -> bool:
+    text = _process_error_text(exc).lower()
+    markers = (
+        "err_nvgpuctrperm",
+        "profiling is not permitted",
+        "does not have permission",
+        "rmprofilingadminonly",
+        "admin users",
+        "permission issue",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _sudo_command(command: list[str]) -> list[str]:
+    preserve_env = "PATH,LD_LIBRARY_PATH,PYTHONPATH,TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD,CUDA_HOME,CXXFLAGS"
+    elevated_command = list(command)
+    if elevated_command and elevated_command[0] == "ncu":
+        elevated_command[0] = shutil.which("ncu") or elevated_command[0]
+    return ["sudo", "-n", f"--preserve-env={preserve_env}", *elevated_command]
+
+
+def _format_failure(command: list[str], exc: BaseException) -> str:
+    if isinstance(exc, subprocess.CalledProcessError):
+        detail = _process_error_text(exc)
+        return f"command {command!r} exited {exc.returncode}: {detail}"
+    return f"command {command!r} failed: {exc}"
+
+
+def _remove_stale_ncu_outputs(output_stem: Path) -> None:
+    for path in (ncu_child_json_path(output_stem),):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _chown_sudo_outputs(output_stem: Path) -> None:
+    paths = [path for path in (output_stem.with_suffix(".ncu-rep"), ncu_child_json_path(output_stem)) if path.exists()]
+    if not paths:
+        return
+    subprocess.run(
+        ["sudo", "-n", "chown", f"{os.getuid()}:{os.getgid()}", *(str(path) for path in paths)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def run_ncu_command(command: list[str], backend: str, output_stem: Path) -> dict:
+    output_stem.parent.mkdir(parents=True, exist_ok=True)
+    _remove_stale_ncu_outputs(output_stem)
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        return {"command": command, "used_sudo": False}
+    except FileNotFoundError as exc:
+        raise RuntimeError("ncu executable was not found; install Nsight Compute or use --dry-run") from exc
+    except subprocess.CalledProcessError as exc:
+        if not _is_ncu_permission_error(exc):
+            raise RuntimeError(f"ncu failed for backend {backend}: {_format_failure(command, exc)}") from exc
+        _remove_stale_ncu_outputs(output_stem)
+        sudo = _sudo_command(command)
+        try:
+            subprocess.run(sudo, check=True, capture_output=True, text=True, env=os.environ.copy())
+            _chown_sudo_outputs(output_stem)
+            return {"command": command, "sudo_command": sudo, "used_sudo": True}
+        except FileNotFoundError as sudo_exc:
+            raise RuntimeError(
+                f"ncu requires elevated profiler permissions for backend {backend}, "
+                "but sudo is not available; set NVreg_RestrictProfilingToAdminUsers=0 or run manually"
+            ) from sudo_exc
+        except subprocess.CalledProcessError as sudo_exc:
+            raise RuntimeError(
+                f"ncu failed for backend {backend} after sudo retry: {_format_failure(sudo, sudo_exc)}"
+            ) from sudo_exc
+
+
+def _load_ncu_child_payload(path: Path, backend: str) -> dict:
+    if not path.exists():
+        raise RuntimeError(f"ncu benchmark for backend {backend} did not create JSON: {path}")
+    return json.loads(path.read_text())
+
+
+def _merge_ncu_child_payload(parent: dict, child: dict) -> None:
+    for key in ("device", "compute_capability"):
+        if child.get(key) is not None:
+            parent[key] = child[key]
+    parent["versions"].update(child.get("versions", {}))
+    parent["results"].update(child.get("results", {}))
+    if child.get("validation"):
+        parent["validation"].update(child["validation"])
+    if child.get("runtime_check"):
+        parent["runtime_check"] = child["runtime_check"]
+
+
+def _run_ncu_profile(cfg: BenchConfig) -> dict:
+    payload = empty_result_payload(cfg)
+    for backend in cfg.backends_to_run():
+        output_stem = _ncu_output_stem(cfg, backend)
+        command = build_ncu_command(cfg, backend=backend, output_stem=output_stem)
+        execution = run_ncu_command(command, backend, output_stem)
+        report_path = output_stem.with_suffix(".ncu-rep")
+        if not report_path.exists():
+            raise RuntimeError(f"ncu did not create report for backend {backend}: {report_path}")
+        child_json = ncu_child_json_path(output_stem)
+        child_payload = _load_ncu_child_payload(child_json, backend)
+        _merge_ncu_child_payload(payload, child_payload)
+        payload["ncu"][backend] = {
+            **parse_ncu_report(str(report_path)),
+            "report_path": str(report_path),
+            "benchmark_json": str(child_json),
+            "command": execution["command"],
+            "used_sudo": execution["used_sudo"],
+        }
+        if execution.get("sudo_command"):
+            payload["ncu"][backend]["sudo_command"] = execution["sudo_command"]
+    write_json(cfg.out, payload)
+    return payload
+
+
 def run_benchmark(cfg: BenchConfig) -> dict:
     if cfg.profile == "ncu" and cfg.dry_run:
         _print_ncu_commands(cfg)
         return empty_result_payload(cfg)
     if cfg.profile == "ncu":
-        raise RuntimeError("ncu profiling execution is not wired yet; use --dry-run to print the ncu command")
+        return _run_ncu_profile(cfg)
 
     import torch
 

@@ -48,13 +48,20 @@ def build_tuning_report(architecture: str, device: str, configs: list[dict]) -> 
     }
 
 
+def ncu_child_json_path(output_stem: Path) -> Path:
+    output_stem = Path(output_stem)
+    return output_stem.with_name(f"{output_stem.name}_bench").with_suffix(".json")
+
+
 def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
+    output_stem = Path(output_stem)
     return [
         "ncu",
         "--set",
         "full",
         "--target-processes",
         "all",
+        "--force-overwrite",
         "-o",
         str(output_stem),
         sys.executable,
@@ -74,12 +81,18 @@ def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
         str(cfg.chunk_edges),
         "--repeats",
         "1",
+        "--warmup",
+        str(cfg.warmup),
+        "--out",
+        str(ncu_child_json_path(output_stem)),
     ]
 
 
 def _max_numeric_metrics(csv_text: str) -> dict[str, float]:
     """Collapse duplicate ncu metric rows to best observed target-kernel values."""
     rows = csv.DictReader(StringIO(csv_text))
+    if rows.fieldnames and "Metric Name" not in rows.fieldnames:
+        return _max_wide_numeric_metrics(rows)
     values: dict[str, float] = {}
     for row in rows:
         try:
@@ -93,19 +106,61 @@ def _max_numeric_metrics(csv_text: str) -> dict[str, float]:
     return values
 
 
+def _max_wide_numeric_metrics(rows: csv.DictReader) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for row in rows:
+        for name, raw_value in row.items():
+            if not name:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            values[name] = max(value, values.get(name, value))
+    return values
+
+
+def _first_metric(values: dict[str, float], names: tuple[str, ...], default: float | None = 0.0) -> float | None:
+    for name in names:
+        if name in values:
+            return values[name]
+    return default
+
+
 def parse_ncu_csv_text(csv_text: str) -> dict:
     values = _max_numeric_metrics(csv_text)
-    dram = values.get("dram__throughput.avg_pct_of_peak_sustained_elapsed", 0.0)
-    occ_pct = values.get("sm__warps_active.avg.pct_of_peak_sustained_active", 0.0)
-    l2_pct = values.get("lts__t_sectors_hit_rate.pct", 0.0)
+    dram = _first_metric(
+        values,
+        (
+            "dram__throughput.avg_pct_of_peak_sustained_elapsed",
+            "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            "dram__bytes.sum.pct_of_peak_sustained_elapsed",
+        ),
+    )
+    occ_pct = _first_metric(values, ("sm__warps_active.avg.pct_of_peak_sustained_active",))
+    l2_pct = _first_metric(values, ("lts__t_sectors_hit_rate.pct", "lts__t_sector_hit_rate.pct"))
     stall_metrics = {
-        "memory_dependency": "smsp__warp_issue_stalled_memory_dependency_per_warp_active.pct",
-        "not_selected": "smsp__warp_issue_stalled_not_selected_per_warp_active.pct",
-        "no_instruction": "smsp__warp_issue_stalled_no_instruction_per_warp_active.pct",
+        "memory_dependency": ("smsp__warp_issue_stalled_memory_dependency_per_warp_active.pct",),
+        "not_selected": (
+            "smsp__warp_issue_stalled_not_selected_per_warp_active.pct",
+            "smsp__average_warps_issue_stalled_not_selected_per_issue_active.ratio",
+        ),
+        "no_instruction": (
+            "smsp__warp_issue_stalled_no_instruction_per_warp_active.pct",
+            "smsp__average_warps_issue_stalled_no_instruction_per_issue_active.ratio",
+        ),
+        "long_scoreboard": ("smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio",),
+        "short_scoreboard": ("smsp__average_warps_issue_stalled_short_scoreboard_per_issue_active.ratio",),
+        "lg_throttle": ("smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.ratio",),
+        "mio_throttle": ("smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.ratio",),
     }
     stall_reason = "unknown"
-    if any(metric in values for metric in stall_metrics.values()):
-        stall_reason = max(stall_metrics, key=lambda name: values.get(stall_metrics[name], 0.0))
+    stall_values = {
+        name: _first_metric(values, metrics, None) for name, metrics in stall_metrics.items()
+    }
+    stall_values = {name: value for name, value in stall_values.items() if value is not None}
+    if stall_values:
+        stall_reason = max(stall_values, key=stall_values.get)
     return {
         "achieved_occupancy": round(occ_pct / 100.0, 4),
         "dram_throughput_pct": dram,
@@ -115,13 +170,18 @@ def parse_ncu_csv_text(csv_text: str) -> dict:
 
 
 def parse_ncu_report(ncu_rep_path: str) -> dict:
-    proc = subprocess.run(
-        ["ncu", "--import", ncu_rep_path, "--csv", "--page", "raw"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return parse_ncu_csv_text(proc.stdout)
+    command = ["ncu", "--import", ncu_rep_path, "--csv", "--page", "raw"]
+    try:
+        proc = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        output = "\n".join(str(part) for part in (exc.stdout, exc.stderr) if part)
+        raise RuntimeError(
+            f"ncu import failed for report {ncu_rep_path} with exit {exc.returncode}: {output}"
+        ) from exc
+    try:
+        return parse_ncu_csv_text(proc.stdout)
+    except Exception as exc:
+        raise RuntimeError(f"ncu CSV parse failed for report {ncu_rep_path}: {exc}") from exc
 
 
 def run_single(**kwargs) -> int:
@@ -142,7 +202,11 @@ def run_single(**kwargs) -> int:
         str(kwargs["chunk_edges"]),
         "--repeats",
         str(kwargs["repeats"]),
+        "--warmup",
+        str(kwargs.get("warmup", 0)),
         "--skip-runtime-check",
+        "--out",
+        str(kwargs.get("out", "oeq_bench_results.json")),
     ]
     return main(args)
 
@@ -156,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-edges", type=int, required=True)
     parser.add_argument("--chunk-edges", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
+    parser.add_argument("--warmup", type=int, default=0)
+    parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     return run_single(
         backend=args.backend,
@@ -165,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         num_edges=args.num_edges,
         chunk_edges=args.chunk_edges,
         repeats=args.repeats,
+        warmup=args.warmup,
+        out=args.out,
     )
 
 

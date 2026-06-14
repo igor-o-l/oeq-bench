@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -34,19 +35,171 @@ def test_json_schema_helper_contains_spec_keys(tmp_path, monkeypatch):
     assert {"device", "versions", "config", "results", "validation", "runtime_check"} <= set(payload)
 
 
-def test_ncu_profile_without_dry_run_fails_before_importing_torch(monkeypatch):
+def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp_path, monkeypatch):
     from oeq_bench import bench
 
     class TorchTrap:
         def find_spec(self, fullname, path=None, target=None):
             if fullname == "torch":
-                raise AssertionError("torch import should not be attempted for ncu early failure")
+                raise AssertionError("torch import should not be attempted by the ncu orchestrator")
             return None
 
     monkeypatch.setattr(sys, "meta_path", [TorchTrap(), *sys.meta_path])
 
-    with pytest.raises(RuntimeError, match="ncu profiling execution is not wired yet"):
-        bench.run_benchmark(BenchConfig(profile="ncu"))
+    calls = []
+
+    def fake_run_ncu_command(command, backend, output_stem):
+        calls.append((command, backend, output_stem))
+        output_stem.with_suffix(".ncu-rep").write_text("fake report")
+        child_json = bench.ncu_child_json_path(output_stem)
+        child_payload = bench.empty_result_payload(BenchConfig(backend=backend, out=child_json))
+        child_payload["results"][backend] = {"ms": 1.25}
+        child_payload["versions"] = {"torch": "fake"}
+        child_json.write_text(json.dumps(child_payload))
+        return {"command": command, "used_sudo": False}
+
+    monkeypatch.setattr(bench, "run_ncu_command", fake_run_ncu_command)
+    monkeypatch.setattr(
+        bench,
+        "parse_ncu_report",
+        lambda path: {
+            "achieved_occupancy": 0.82,
+            "dram_throughput_pct": 67.4,
+            "l2_hit_rate": 0.45,
+            "stall_reason": "memory_dependency",
+        },
+    )
+
+    out = tmp_path / "profile.json"
+    payload = bench.run_benchmark(BenchConfig(profile="ncu", out=out))
+
+    assert len(calls) == 1
+    command, backend, output_stem = calls[0]
+    assert backend == "oeq"
+    assert output_stem == tmp_path / "profile"
+    assert command[:4] == ["ncu", "--set", "full", "--target-processes"]
+    assert payload["results"]["oeq"] == {"ms": 1.25}
+    assert payload["versions"] == {"torch": "fake"}
+    assert payload["ncu"]["oeq"]["dram_throughput_pct"] == 67.4
+    assert payload["ncu"]["oeq"]["report_path"] == str(tmp_path / "profile.ncu-rep")
+    assert payload["ncu"]["oeq"]["benchmark_json"] == str(tmp_path / "profile_bench.json")
+    assert payload["ncu"]["oeq"]["used_sudo"] is False
+    assert json.loads(out.read_text()) == payload
+
+
+def test_ncu_profile_both_backends_uses_distinct_reports(tmp_path, monkeypatch):
+    from oeq_bench import bench
+
+    calls = []
+
+    def fake_run_ncu_command(command, backend, output_stem):
+        calls.append((backend, output_stem))
+        output_stem.with_suffix(".ncu-rep").write_text("fake report")
+        child_json = bench.ncu_child_json_path(output_stem)
+        child_payload = bench.empty_result_payload(BenchConfig(backend=backend, out=child_json))
+        child_payload["results"][backend] = {"ms": 1.0 if backend == "oeq" else 2.0}
+        child_json.write_text(json.dumps(child_payload))
+        return {"command": command, "used_sudo": backend == "cueq"}
+
+    monkeypatch.setattr(bench, "run_ncu_command", fake_run_ncu_command)
+    monkeypatch.setattr(bench, "parse_ncu_report", lambda path: {"dram_throughput_pct": 50.0})
+
+    out = tmp_path / "profile.json"
+    payload = bench.run_benchmark(BenchConfig(profile="ncu", backend="both", out=out))
+
+    assert calls == [("oeq", tmp_path / "profile_oeq"), ("cueq", tmp_path / "profile_cueq")]
+    assert payload["results"]["oeq"] == {"ms": 1.0}
+    assert payload["results"]["cueq"] == {"ms": 2.0}
+    assert payload["ncu"]["oeq"]["report_path"] == str(tmp_path / "profile_oeq.ncu-rep")
+    assert payload["ncu"]["cueq"]["report_path"] == str(tmp_path / "profile_cueq.ncu-rep")
+    assert payload["ncu"]["cueq"]["used_sudo"] is True
+
+
+def test_ncu_profile_fails_when_report_is_missing(tmp_path, monkeypatch):
+    from oeq_bench import bench
+
+    def fake_run_ncu_command(command, backend, output_stem):
+        bench.ncu_child_json_path(output_stem).write_text(json.dumps(bench.empty_result_payload(BenchConfig())))
+        return {"command": command, "used_sudo": False}
+
+    monkeypatch.setattr(bench, "run_ncu_command", fake_run_ncu_command)
+
+    with pytest.raises(RuntimeError, match="ncu did not create report"):
+        bench.run_benchmark(BenchConfig(profile="ncu", out=tmp_path / "profile.json"))
+
+
+def test_ncu_profile_removes_stale_child_json_before_first_run(tmp_path, monkeypatch):
+    from oeq_bench import bench
+
+    out = tmp_path / "profile.json"
+    output_stem = tmp_path / "profile"
+    child_json = bench.ncu_child_json_path(output_stem)
+    child_json.write_text(json.dumps({"results": {"oeq": {"ms": "stale"}}}))
+
+    def fake_run(command, **kwargs):
+        assert command[0] == "ncu"
+        assert not child_json.exists()
+        output_stem.with_suffix(".ncu-rep").write_text("fresh report")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="did not create JSON"):
+        bench.run_benchmark(BenchConfig(profile="ncu", out=out))
+    assert not child_json.exists()
+
+
+def test_run_ncu_command_retries_permission_failure_with_sudo(tmp_path, monkeypatch):
+    from oeq_bench import bench
+
+    calls = []
+    child_json = bench.ncu_child_json_path(tmp_path / "profile")
+    child_json.write_text("{}")
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0] == "ncu":
+            assert not child_json.exists()
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=command,
+                stderr="ERR_NVGPUCTRPERM: profiling is not permitted",
+            )
+        if command[0] == "sudo" and any(part.endswith("/ncu") or part == "ncu" for part in command):
+            assert not child_json.exists()
+            child_json.write_text("{}")
+            (tmp_path / "profile.ncu-rep").write_text("report")
+            return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+        if command[0] == "sudo" and command[2] == "chown":
+            assert child_json.exists()
+            return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+        assert not child_json.exists()
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+    monkeypatch.setattr(bench.shutil, "which", lambda name: "/usr/local/cuda/bin/ncu" if name == "ncu" else None)
+
+    result = bench.run_ncu_command(["ncu", "-o", str(tmp_path / "profile")], "oeq", tmp_path / "profile")
+
+    assert calls[0][0] == "ncu"
+    assert calls[1][:2] == ["sudo", "-n"]
+    assert "/usr/local/cuda/bin/ncu" in calls[1]
+    assert calls[2][:3] == ["sudo", "-n", "chown"]
+    assert str(tmp_path / "profile.ncu-rep") in calls[2]
+    assert str(child_json) in calls[2]
+    assert result["used_sudo"] is True
+
+
+def test_run_ncu_command_wraps_non_permission_failure(tmp_path, monkeypatch):
+    from oeq_bench import bench
+
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(returncode=2, cmd=command, stderr="bad option")
+
+    monkeypatch.setattr(bench.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="ncu failed for backend oeq"):
+        bench.run_ncu_command(["ncu", "--bad"], "oeq", tmp_path / "profile")
 
 
 def test_ncu_dry_run_both_backends_uses_distinct_output_stems(tmp_path, capsys):

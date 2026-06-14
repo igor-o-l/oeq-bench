@@ -1,15 +1,31 @@
 from pathlib import Path
+import subprocess
+
+import pytest
 
 from oeq_bench.config import BenchConfig
-from oeq_bench.profiling import build_ncu_command, main, parse_ncu_csv_text, run_single
+from oeq_bench.profiling import (
+    build_ncu_command,
+    main,
+    ncu_child_json_path,
+    parse_ncu_csv_text,
+    parse_ncu_report,
+    run_single,
+)
 
 
 def test_build_ncu_command_contains_profile_target():
-    cfg = BenchConfig(num_edges=8192, repeats=1, validate=False)
+    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=False)
     cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
     assert cmd[:4] == ["ncu", "--set", "full", "--target-processes"]
     assert "oeq_bench.profiling" in " ".join(cmd)
     assert "--backend oeq" in " ".join(cmd)
+    assert "--warmup 0" in " ".join(cmd)
+    assert "--out /tmp/oeq_profile_bench.json" in " ".join(cmd)
+
+
+def test_ncu_child_json_path_is_separate_from_parent_output():
+    assert ncu_child_json_path(Path("/tmp/profile")) == Path("/tmp/profile_bench.json")
 
 
 def test_parse_ncu_csv_text_extracts_metrics():
@@ -27,6 +43,26 @@ def test_parse_ncu_csv_text_extracts_metrics():
     assert parsed["achieved_occupancy"] == 0.82
     assert parsed["l2_hit_rate"] == 0.45
     assert parsed["stall_reason"] == "memory_dependency"
+
+
+def test_parse_ncu_csv_text_extracts_wide_raw_metrics():
+    csv_text = "\n".join(
+        [
+            (
+                '"ID","Kernel Name","gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",'
+                '"sm__warps_active.avg.pct_of_peak_sustained_active","lts__t_sector_hit_rate.pct",'
+                '"smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio",'
+                '"smsp__average_warps_issue_stalled_not_selected_per_issue_active.ratio"'
+            ),
+            '"1","warmup","4.2","12.5","20.0","0.1","0.4"',
+            '"2","target","61.5","78.0","57.0","0.9","0.2"',
+        ]
+    )
+    parsed = parse_ncu_csv_text(csv_text)
+    assert parsed["dram_throughput_pct"] == 61.5
+    assert parsed["achieved_occupancy"] == 0.78
+    assert parsed["l2_hit_rate"] == 0.57
+    assert parsed["stall_reason"] == "long_scoreboard"
 
 
 def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
@@ -52,7 +88,11 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         "64",
         "--repeats",
         "3",
+        "--warmup",
+        "0",
         "--skip-runtime-check",
+        "--out",
+        "/tmp/profile.json",
     ]
 
     assert run_single(
@@ -63,6 +103,8 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         num_edges=512,
         chunk_edges=64,
         repeats=3,
+        warmup=0,
+        out="/tmp/profile.json",
     ) == 17
     assert calls[-1] == expected
 
@@ -82,6 +124,10 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
             "64",
             "--repeats",
             "3",
+            "--warmup",
+            "0",
+            "--out",
+            "/tmp/profile.json",
         ]
     ) == 17
     assert calls[-1] == expected
@@ -120,3 +166,53 @@ def test_parse_ncu_csv_text_returns_unknown_stall_reason_without_stall_metrics()
     )
     parsed = parse_ncu_csv_text(csv_text)
     assert parsed["stall_reason"] == "unknown"
+
+
+def test_parse_ncu_report_imports_raw_csv(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="\n".join(
+                [
+                    '"Metric Name","Metric Unit","Metric Value"',
+                    '"dram__throughput.avg_pct_of_peak_sustained_elapsed","%","67.4"',
+                ]
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("oeq_bench.profiling.subprocess.run", fake_run)
+
+    parsed = parse_ncu_report("/tmp/profile.ncu-rep")
+
+    assert calls == [
+        (
+            ["ncu", "--import", "/tmp/profile.ncu-rep", "--csv", "--page", "raw"],
+            {"check": True, "capture_output": True, "text": True},
+        )
+    ]
+    assert parsed["dram_throughput_pct"] == 67.4
+
+
+def test_parse_ncu_report_wraps_import_failure(monkeypatch):
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=7,
+            cmd=command,
+            output="partial csv",
+            stderr="import failed",
+        )
+
+    monkeypatch.setattr("oeq_bench.profiling.subprocess.run", fake_run)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        parse_ncu_report("/tmp/bad.ncu-rep")
+    message = str(excinfo.value)
+    assert "ncu import failed for report /tmp/bad.ncu-rep" in message
+    assert "exit 7" in message
+    assert "import failed" in message
+    assert "partial csv" in message
