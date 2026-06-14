@@ -21,6 +21,7 @@ dev = ["pytest"]
 
 [project.scripts]
 oeq-bench = "oeq_bench.bench:main"
+oeq-runtime-check = "oeq_bench.runtime:main"
 
-[tool.setuptools]
-packages = ["oeq_bench"]
+[tool.setuptools.packages.find]
+include = ["oeq_bench*"]
