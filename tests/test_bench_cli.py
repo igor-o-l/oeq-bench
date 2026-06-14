@@ -32,7 +32,7 @@ def test_json_schema_helper_contains_spec_keys(tmp_path, monkeypatch):
     out = tmp_path / "results.json"
     assert main(["--out", str(out)]) == 0
     payload = json.loads(out.read_text())
-    assert {"device", "versions", "config", "results", "validation", "runtime_check"} <= set(payload)
+    assert {"device", "versions", "config", "results", "validation", "runtime_check", "kernel_config"} <= set(payload)
 
 
 def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp_path, monkeypatch):
@@ -266,6 +266,7 @@ def test_validation_failure_writes_diagnostics_and_skips_oeq_timing(tmp_path, mo
         SimpleNamespace(weight_numel=3),
         SimpleNamespace(forward=lambda *args: "oeq-output"),
     )
+    fake_oeq.describe_oeq_kernel = lambda conv, cfg: {"requested_block_size": cfg.block_size}
     fake_oeq.version = lambda: "fake-oeq"
     monkeypatch.setitem(sys.modules, "oeq_bench.backends.oeq", fake_oeq)
 

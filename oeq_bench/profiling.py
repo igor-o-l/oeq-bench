@@ -83,6 +83,8 @@ def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
         "1",
         "--warmup",
         str(cfg.warmup),
+        "--block-size",
+        str(cfg.block_size),
         "--out",
         str(ncu_child_json_path(output_stem)),
     ]
@@ -204,6 +206,8 @@ def run_single(**kwargs) -> int:
         str(kwargs["repeats"]),
         "--warmup",
         str(kwargs.get("warmup", 0)),
+        "--block-size",
+        str(kwargs["block_size"]),
         "--skip-runtime-check",
         "--out",
         str(kwargs.get("out", "oeq_bench_results.json")),
@@ -221,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--chunk-edges", type=int, required=True)
     parser.add_argument("--repeats", type=int, required=True)
     parser.add_argument("--warmup", type=int, default=0)
+    parser.add_argument("--block-size", type=int, default=256)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     return run_single(
@@ -232,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         chunk_edges=args.chunk_edges,
         repeats=args.repeats,
         warmup=args.warmup,
+        block_size=args.block_size,
         out=args.out,
     )
 

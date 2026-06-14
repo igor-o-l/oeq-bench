@@ -21,6 +21,28 @@ def build_oeq_conv(cfg):
     return problem, conv
 
 
+def _launch_config_dict(schedule) -> dict:
+    launch_config = schedule.launch_config
+    num_threads = int(launch_config.num_threads)
+    warp_size = int(launch_config.warp_size)
+    return {
+        "num_blocks": int(launch_config.num_blocks),
+        "num_threads": num_threads,
+        "warp_size": warp_size,
+        "warps_per_block": num_threads // warp_size if warp_size else None,
+        "smem": int(launch_config.smem),
+    }
+
+
+def describe_oeq_kernel(conv, cfg) -> dict:
+    return {
+        "requested_block_size": cfg.block_size,
+        "requested_block_size_effective": False,
+        "forward": _launch_config_dict(conv.forward_schedule),
+        "kernel_hash": conv.hash,
+    }
+
+
 def run_oeq(conv, X, Y, W, rows, cols):
     return conv.forward(X, Y, W, rows, cols)
 

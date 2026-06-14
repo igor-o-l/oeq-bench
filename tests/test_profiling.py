@@ -15,12 +15,13 @@ from oeq_bench.profiling import (
 
 
 def test_build_ncu_command_contains_profile_target():
-    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=False)
+    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=False, block_size=128)
     cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
     assert cmd[:4] == ["ncu", "--set", "full", "--target-processes"]
     assert "oeq_bench.profiling" in " ".join(cmd)
     assert "--backend oeq" in " ".join(cmd)
     assert "--warmup 0" in " ".join(cmd)
+    assert "--block-size 128" in " ".join(cmd)
     assert "--out /tmp/oeq_profile_bench.json" in " ".join(cmd)
 
 
@@ -90,6 +91,8 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         "3",
         "--warmup",
         "0",
+        "--block-size",
+        "512",
         "--skip-runtime-check",
         "--out",
         "/tmp/profile.json",
@@ -104,6 +107,7 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         chunk_edges=64,
         repeats=3,
         warmup=0,
+        block_size=512,
         out="/tmp/profile.json",
     ) == 17
     assert calls[-1] == expected
@@ -126,6 +130,8 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
             "3",
             "--warmup",
             "0",
+            "--block-size",
+            "512",
             "--out",
             "/tmp/profile.json",
         ]

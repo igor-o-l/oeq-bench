@@ -74,6 +74,7 @@ def empty_result_payload(cfg: BenchConfig) -> dict:
         "results": {},
         "validation": {},
         "runtime_check": {},
+        "kernel_config": {},
         "ncu": {},
     }
 
@@ -182,6 +183,7 @@ def _merge_ncu_child_payload(parent: dict, child: dict) -> None:
             parent[key] = child[key]
     parent["versions"].update(child.get("versions", {}))
     parent["results"].update(child.get("results", {}))
+    parent["kernel_config"].update(child.get("kernel_config", {}))
     if child.get("validation"):
         parent["validation"].update(child["validation"])
     if child.get("runtime_check"):
@@ -253,10 +255,11 @@ def run_benchmark(cfg: BenchConfig) -> dict:
     validation: dict = {}
     for backend in cfg.backends_to_run():
         if backend == "oeq":
-            from .backends.oeq import build_oeq_conv, version
+            from .backends.oeq import build_oeq_conv, describe_oeq_kernel, version
             from .validation import validate_oeq
 
             problem, conv = build_oeq_conv(cfg)
+            payload["kernel_config"]["oeq"] = describe_oeq_kernel(conv, cfg)
             if problem.weight_numel != weight_numel:
                 raise RuntimeError(f"weight layout mismatch: e3nn={weight_numel}, oeq={problem.weight_numel}")
             validation = validate_oeq(tp_e3nn, conv, X, Y, W, src, dst, cfg) if cfg.validate else {}
