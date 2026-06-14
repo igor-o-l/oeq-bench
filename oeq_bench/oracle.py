@@ -9,7 +9,53 @@ Ported from MLIPs/experiments/labs/L13-oeq-fused-tp-conv-benchmark/benchmark_oeq
 Requires torch + e3nn in the environment.
 """
 from __future__ import annotations
-import torch
+
+try:
+    import torch
+except ModuleNotFoundError:  # pragma: no cover - exercised in optional-dependency environments
+    torch = None
+
+from .backends import build_instructions
+
+
+def _torch_dtype(name: str):
+    if torch is None:
+        raise ModuleNotFoundError("torch")
+    return getattr(torch, name)
+
+
+def build_e3nn_tp(cfg):
+    from e3nn.o3 import Irreps, TensorProduct
+
+    irreps_in1 = Irreps(cfg.irreps_in1)
+    irreps_in2 = Irreps(cfg.irreps_in2)
+    irreps_out = Irreps(cfg.irreps_out)
+    tp = TensorProduct(
+        irreps_in1,
+        irreps_in2,
+        irreps_out,
+        build_instructions(irreps_in1, irreps_in2, irreps_out),
+        shared_weights=False,
+        internal_weights=False,
+    ).to(_torch_dtype(cfg.dtype))
+    return tp.to(cfg.device)
+
+
+def make_graph_data(cfg, weight_numel: int, seed: int = 42):
+    from e3nn.o3 import Irreps
+
+    if torch is None:
+        raise ModuleNotFoundError("torch")
+    torch.manual_seed(seed)
+    irreps_in1 = Irreps(cfg.irreps_in1)
+    irreps_in2 = Irreps(cfg.irreps_in2)
+    dtype = _torch_dtype(cfg.dtype)
+    X = torch.randn(cfg.num_nodes, irreps_in1.dim, dtype=dtype, device=cfg.device)
+    Y = torch.randn(cfg.num_edges, irreps_in2.dim, dtype=dtype, device=cfg.device)
+    W = torch.randn(cfg.num_edges, weight_numel, dtype=dtype, device=cfg.device)
+    src = torch.randint(0, cfg.num_nodes, (cfg.num_edges,), dtype=torch.int64, device=cfg.device)
+    dst = torch.randint(0, cfg.num_nodes, (cfg.num_edges,), dtype=torch.int64, device=cfg.device)
+    return X, Y, W, src, dst
 
 
 def e3nn_scatter(tp, X, Y, W, src, dst, num_nodes, chunk=0):
