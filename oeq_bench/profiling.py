@@ -94,15 +94,25 @@ def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
         str(cfg.num_edges),
         "--chunk-edges",
         str(cfg.chunk_edges),
+        "--seed",
+        str(cfg.seed),
         "--repeats",
         "1",
         "--warmup",
         str(cfg.warmup),
         "--block-size",
         str(cfg.block_size),
+        "--oeq-load-strategy",
+        cfg.oeq_load_strategy,
+        "--oeq-schedule-strategy",
+        cfg.oeq_schedule_strategy,
+        "--edge-ordering",
+        cfg.edge_ordering,
         "--out",
         str(ncu_child_json_path(output_stem)),
     ]
+    if cfg.validate:
+        command.append("--validate")
     if cfg.l1_carveout is not None:
         command.extend(["--l1-carveout", str(cfg.l1_carveout)])
     return command
@@ -294,16 +304,26 @@ def run_single(**kwargs) -> int:
         str(kwargs["num_edges"]),
         "--chunk-edges",
         str(kwargs["chunk_edges"]),
+        "--seed",
+        str(kwargs.get("seed", 42)),
         "--repeats",
         str(kwargs["repeats"]),
         "--warmup",
         str(kwargs.get("warmup", 0)),
         "--block-size",
         str(kwargs["block_size"]),
+        "--oeq-load-strategy",
+        kwargs.get("oeq_load_strategy", "scalar"),
+        "--oeq-schedule-strategy",
+        kwargs.get("oeq_schedule_strategy", "default"),
+        "--edge-ordering",
+        kwargs.get("edge_ordering", "random"),
         "--skip-runtime-check",
         "--out",
         str(kwargs.get("out", "oeq_bench_results.json")),
     ]
+    if kwargs.get("validate"):
+        args.append("--validate")
     if kwargs.get("l1_carveout") is not None:
         args.extend(["--l1-carveout", str(kwargs["l1_carveout"])])
     return main(args)
@@ -317,10 +337,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--num-nodes", type=int, required=True)
     parser.add_argument("--num-edges", type=int, required=True)
     parser.add_argument("--chunk-edges", type=int, required=True)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--repeats", type=int, required=True)
     parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--l1-carveout", type=int)
+    parser.add_argument("--validate", action="store_true")
+    parser.add_argument("--oeq-load-strategy", choices=["scalar", "vectorized"], default="scalar")
+    parser.add_argument("--oeq-schedule-strategy", choices=["default", "persistent"], default="default")
+    parser.add_argument("--edge-ordering", choices=["random", "dst-src", "src-dst"], default="random")
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     return run_single(
@@ -330,10 +355,15 @@ def main(argv: list[str] | None = None) -> int:
         num_nodes=args.num_nodes,
         num_edges=args.num_edges,
         chunk_edges=args.chunk_edges,
+        seed=args.seed,
         repeats=args.repeats,
         warmup=args.warmup,
         block_size=args.block_size,
         l1_carveout=args.l1_carveout,
+        validate=args.validate,
+        oeq_load_strategy=args.oeq_load_strategy,
+        oeq_schedule_strategy=args.oeq_schedule_strategy,
+        edge_ordering=args.edge_ordering,
         out=args.out,
     )
 

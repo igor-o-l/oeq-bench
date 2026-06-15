@@ -52,9 +52,12 @@ channelwise tensor-product `SegmentedPolynomial`. The OEQ backend remains the de
 cuEq's graph scatter path is validated against the same e3nn oracle.
 
 ## Status
-On rog (sm_120): the local OpenEquivariance fork beat chunked-e3nn 14.3× @ 200K edges under e3nn 0.6.0, fwd+grad validated.
-`TensorProductConv(block_size=..., l1_carveout=...)` is wired through to the generated CUDA launch path;
-`block_size=128` is the stable recommendation and explicit carveout did not show a reproducible gain.
+On rog (sm_120): the local OpenEquivariance fork beat chunked-e3nn 21.7× @ 200K edges under e3nn 0.6.0
+when generated edges are sorted by `(dst, src)`, with forward plus `dL/dX`, `dL/dY`, and `dL/dW`
+validated. `TensorProductConv(block_size=..., l1_carveout=..., load_strategy=..., schedule_strategy=...)`
+is wired through to the generated CUDA path. The stable recommendation is `block_size=128`, default
+carveout, scalar loads, default schedule, and `--edge-ordering dst-src`; explicit carveout and guarded
+`float4` vectorization did not show a reproducible gain.
 cuEquivariance has a smoke wrapper and channelwise tensor-product constructor, but not yet the decision-grade
 graph scatter benchmark. TODO: upstream OEQ GCC14/CUDA13 build-fix PR, targeted Nsight kernel filters,
 publish per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
@@ -62,7 +65,7 @@ publish per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (
 ## Spec 3 Verification (2026-06-14)
 
 - command: `pixi run -e mlip python -m pytest src/tests -q` from MLIPs root -> `11 passed in 0.75s`
-- command: `pixi run -e mlip python -m pytest tests -q` from `external/oeq-bench` -> `56 passed, 1 warning in 1.61s`
+- command: `pixi run -e mlip python -m pytest tests -q` from `external/oeq-bench` -> `68 passed, 1 warning in 1.70s`
 - command: `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 bash scripts/test_spec3_e2e.sh` from MLIPs root -> `Spec 3 smoke: NVIDIA GeForce RTX 5080 Laptop GPU 157.768`
 - command: `TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 pixi run -e mlip oeq-bench --irreps "128x0e+128x1o+128x2e" --irreps-sh "0e+1o+2e+3o" --num-nodes 12500 --num-edges 200000 --chunk-edges 16384 --backend oeq --validate --profile cuda-events --repeats 20 --out experiments/labs/L13-oeq-fused-tp-conv-benchmark/l13_results.json`
 - git SHA: pre-evidence/run SHAs were MLIPs `21ff556a4271548dc71cf3c2aae35eb54b3d1468` and oeq-bench `c42904542908c50a8ed4cef3504f19230b9129a5`
@@ -73,3 +76,4 @@ publish per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (
 - bandwidth: OEQ `738.046 GB/s`, `82.371%` of 896 GB/s measured peak
 - launch config: requested `--block-size 128`, actual OEQ forward config `60` blocks, `128` threads, `4` warps/block, `63744` bytes shared memory; the requested block size is effective in the local OpenEquivariance fork.
 - ncu status: `--profile ncu` ran the generated command, retried successfully with `sudo -n ncu`, wrote `sm120_e3nn060_bs128_ncu.ncu-rep`, imported counters with `ncu --import ... --csv --page raw`, selected the OEQ main `forward(... ConvData ...)` row (ID `945`, grid `(60, 1, 1)`, block `(128, 1, 1)`), and wrote parsed metrics under `payload["ncu"]["oeq"]`: occupancy `0.0824`, DRAM throughput `82.268618%`, L2 hit rate `0.1429`, stall reason `long_scoreboard`.
+- experimental sm_120 sweep: `sm120_e3nn060_experimental_exhaustive_eval.json` covers 108 full L13 cases across block size, L1 carveout, load strategy, forward schedule strategy, and edge ordering. The aggregate is self-contained; per-case JSON files are transient unless `oeq-bench-exhaustive --keep-run-jsons` is used. `90/108` passed all-input correctness; every failure was `block_size=256` with the experimental persistent schedule, and that known-unsafe combination is now rejected before kernel execution. The confirmed benchmark recommendation is `--block-size 128 --oeq-load-strategy scalar --oeq-schedule-strategy default --edge-ordering dst-src`, which reached `2.8518 ms`, `70.130 Medges/s`, and `21.666x` vs e3nn in a 50-repeat run; downstream calculator integrations still need to apply equivalent edge sorting at the graph/OEQ call boundary.

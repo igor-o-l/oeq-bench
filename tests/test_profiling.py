@@ -15,13 +15,25 @@ from oeq_bench.profiling import (
 
 
 def test_build_ncu_command_contains_profile_target():
-    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=False, block_size=128)
+    cfg = BenchConfig(
+        num_edges=8192,
+        warmup=0,
+        repeats=1,
+        validate=False,
+        block_size=128,
+        oeq_load_strategy="vectorized",
+        oeq_schedule_strategy="persistent",
+        edge_ordering="dst-src",
+    )
     cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
     assert cmd[:4] == ["ncu", "--set", "full", "--target-processes"]
     assert "oeq_bench.profiling" in " ".join(cmd)
     assert "--backend oeq" in " ".join(cmd)
     assert "--warmup 0" in " ".join(cmd)
     assert "--block-size 128" in " ".join(cmd)
+    assert "--oeq-load-strategy vectorized" in " ".join(cmd)
+    assert "--oeq-schedule-strategy persistent" in " ".join(cmd)
+    assert "--edge-ordering dst-src" in " ".join(cmd)
     assert "--l1-carveout" not in cmd
     assert "--out /tmp/oeq_profile_bench.json" in " ".join(cmd)
 
@@ -30,6 +42,18 @@ def test_build_ncu_command_contains_l1_carveout_when_requested():
     cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, block_size=128, l1_carveout=0)
     cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
     assert "--l1-carveout 0" in " ".join(cmd)
+
+
+def test_build_ncu_command_forwards_validate_when_requested():
+    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=True)
+    cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
+    assert "--validate" in cmd
+
+
+def test_build_ncu_command_omits_validate_by_default():
+    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, validate=False)
+    cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
+    assert "--validate" not in cmd
 
 
 def test_ncu_child_json_path_is_separate_from_parent_output():
@@ -131,12 +155,20 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         "512",
         "--chunk-edges",
         "64",
+        "--seed",
+        "42",
         "--repeats",
         "3",
         "--warmup",
         "0",
         "--block-size",
         "512",
+            "--oeq-load-strategy",
+            "scalar",
+            "--oeq-schedule-strategy",
+            "default",
+        "--edge-ordering",
+        "random",
         "--skip-runtime-check",
         "--out",
         "/tmp/profile.json",
@@ -166,6 +198,21 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         repeats=3,
         warmup=0,
         block_size=512,
+        validate=True,
+        out="/tmp/profile.json",
+    ) == 17
+    assert "--validate" in calls[-1]
+
+    assert run_single(
+        backend="oeq",
+        irreps="16x0e",
+        irreps_sh="0e+1o",
+        num_nodes=128,
+        num_edges=512,
+        chunk_edges=64,
+        repeats=3,
+        warmup=0,
+        block_size=512,
         l1_carveout=0,
         out="/tmp/profile.json",
     ) == 17
@@ -182,12 +229,20 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         "512",
         "--chunk-edges",
         "64",
+        "--seed",
+        "42",
         "--repeats",
         "3",
         "--warmup",
         "0",
         "--block-size",
         "512",
+            "--oeq-load-strategy",
+            "scalar",
+            "--oeq-schedule-strategy",
+            "default",
+            "--edge-ordering",
+            "random",
         "--skip-runtime-check",
         "--out",
         "/tmp/profile.json",

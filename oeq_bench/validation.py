@@ -7,7 +7,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in optional-dependency environments
     torch = None
 
-from .oracle import e3nn_grad_chunked, e3nn_scatter
+from .oracle import e3nn_grads_chunked, e3nn_scatter
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,12 @@ def _failure_result(cfg, *, fwd_error: str | None, grad_error: str | None) -> di
         "fwd_err": None,
         "grad_ok": False,
         "grad_err": None,
+        "grad_x_ok": False,
+        "grad_x_err": None,
+        "grad_y_ok": False,
+        "grad_y_err": None,
+        "grad_w_ok": False,
+        "grad_w_err": None,
         "chunk_edges": cfg.chunk_edges,
         "fwd_error": fwd_error,
         "grad_error": grad_error,
@@ -88,19 +94,49 @@ def validate_oeq(tp_e3nn, oeq_conv, X, Y, W, src, dst, cfg) -> dict:
         try:
             Yd = Y.detach()
             Wd = W.detach()
-            grad_ref = e3nn_grad_chunked(tp_e3nn, X, Yd, Wd, src, dst, cfg.chunk_edges)
-            if grad_ref is None:
-                raise RuntimeError("e3nn gradient reference returned None")
+            grad_ref = e3nn_grads_chunked(tp_e3nn, X, Yd, Wd, src, dst, cfg.chunk_edges)
+            missing_ref = [name for name, grad in grad_ref.items() if grad is None]
+            if missing_ref:
+                raise RuntimeError(
+                    "e3nn gradient reference returned None for "
+                    + ", ".join(sorted(missing_ref))
+                )
             Xo = X.detach().clone().requires_grad_(True)
-            oeq_conv.forward(Xo, Yd, Wd, rows, cols).sum().backward()
-            if Xo.grad is None:
-                raise RuntimeError("OEQ backward produced no X gradient")
-            grad_err = max_abs_err(grad_ref, Xo.grad)
-            grad_ok = bool(torch.allclose(grad_ref, Xo.grad, rtol=cfg.rtol, atol=cfg.atol))
+            Yo = Yd.clone().requires_grad_(True)
+            Wo = Wd.clone().requires_grad_(True)
+            oeq_conv.forward(Xo, Yo, Wo, rows, cols).sum().backward()
+            grad_out = {"x": Xo.grad, "y": Yo.grad, "w": Wo.grad}
+            missing_out = [name for name, grad in grad_out.items() if grad is None]
+            if missing_out:
+                raise RuntimeError(
+                    "OEQ backward produced no gradient for "
+                    + ", ".join(sorted(missing_out))
+                )
+            grad_errors = {
+                name: max_abs_err(grad_ref[name], grad_out[name])
+                for name in ("x", "y", "w")
+            }
+            grad_oks = {
+                name: bool(
+                    torch.allclose(
+                        grad_ref[name],
+                        grad_out[name],
+                        rtol=cfg.rtol,
+                        atol=cfg.atol,
+                    )
+                )
+                for name in ("x", "y", "w")
+            }
+            grad_err = max(grad_errors.values())
+            grad_ok = all(grad_oks.values())
         except Exception as exc:
             grad_error = _error_message(exc)
+            grad_errors = {"x": None, "y": None, "w": None}
+            grad_oks = {"x": False, "y": False, "w": False}
     else:
         grad_error = "skipped because forward validation failed"
+        grad_errors = {"x": None, "y": None, "w": None}
+        grad_oks = {"x": False, "y": False, "w": False}
 
     return {
         "orientation": orient.orientation,
@@ -109,6 +145,12 @@ def validate_oeq(tp_e3nn, oeq_conv, X, Y, W, src, dst, cfg) -> dict:
         "fwd_err": fwd_err,
         "grad_ok": grad_ok,
         "grad_err": grad_err,
+        "grad_x_ok": grad_oks["x"],
+        "grad_x_err": grad_errors["x"],
+        "grad_y_ok": grad_oks["y"],
+        "grad_y_err": grad_errors["y"],
+        "grad_w_ok": grad_oks["w"],
+        "grad_w_err": grad_errors["w"],
         "chunk_edges": cfg.chunk_edges,
         "fwd_error": fwd_error,
         "grad_error": grad_error,

@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--num-nodes", type=int, default=BenchConfig.num_nodes)
     ap.add_argument("--num-edges", type=int, default=BenchConfig.num_edges)
     ap.add_argument("--chunk-edges", type=int, default=BenchConfig.chunk_edges)
+    ap.add_argument("--seed", type=int, default=BenchConfig.seed)
     ap.add_argument("--backend", choices=["oeq", "cueq", "both"], default=BenchConfig.backend)
     ap.add_argument("--validate", action="store_true")
     ap.add_argument("--profile", choices=["cuda-events", "ncu"], default=BenchConfig.profile)
@@ -55,6 +56,24 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--bw-peak-gbs", type=float, default=BenchConfig.bw_peak_gbs)
     ap.add_argument("--block-size", type=int, choices=[128, 256, 512], default=BenchConfig.block_size)
     ap.add_argument("--l1-carveout", type=int, default=BenchConfig.l1_carveout)
+    ap.add_argument(
+        "--oeq-load-strategy",
+        choices=["scalar", "vectorized"],
+        default=BenchConfig.oeq_load_strategy,
+        help="experimental OEQ generated-kernel load strategy",
+    )
+    ap.add_argument(
+        "--oeq-schedule-strategy",
+        choices=["default", "persistent"],
+        default=BenchConfig.oeq_schedule_strategy,
+        help="experimental OEQ generated-kernel forward schedule strategy",
+    )
+    ap.add_argument(
+        "--edge-ordering",
+        choices=["random", "dst-src", "src-dst"],
+        default=BenchConfig.edge_ordering,
+        help="order generated graph edges before validation/timing",
+    )
     return ap
 
 
@@ -70,10 +89,15 @@ def empty_result_payload(cfg: BenchConfig) -> dict:
             "num_nodes": cfg.num_nodes,
             "num_edges": cfg.num_edges,
             "chunk_edges": cfg.chunk_edges,
+            "seed": cfg.seed,
             "block_size": cfg.block_size,
             "l1_carveout": cfg.l1_carveout,
+            "oeq_load_strategy": cfg.oeq_load_strategy,
+            "oeq_schedule_strategy": cfg.oeq_schedule_strategy,
+            "edge_ordering": cfg.edge_ordering,
         },
         "results": {},
+        "profiled_results": {},
         "validation": {},
         "runtime_check": {},
         "kernel_config": {},
@@ -187,7 +211,9 @@ def _merge_ncu_child_payload(parent: dict, child: dict) -> None:
         if child.get(key) is not None:
             parent[key] = child[key]
     parent["versions"].update(child.get("versions", {}))
-    parent["results"].update(child.get("results", {}))
+    if child.get("results"):
+        parent["profiled_results"].update(child["results"])
+        parent["profiled_results"]["ncu_overhead"] = True
     parent["kernel_config"].update(child.get("kernel_config", {}))
     if child.get("validation"):
         parent["validation"].update(child["validation"])

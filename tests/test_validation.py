@@ -7,6 +7,7 @@ def test_validation_module_imports_without_torch():
     validation = importlib.import_module("oeq_bench.validation")
     assert hasattr(validation, "choose_orientation")
     assert hasattr(validation, "validate_oeq")
+    assert hasattr(validation, "e3nn_grads_chunked")
 
 
 def test_choose_orientation_prefers_rows_dst_cols_src():
@@ -112,14 +113,15 @@ class _TrackTensor:
 
 
 class _BackwardValue:
-    def __init__(self, x):
-        self.x = x
+    def __init__(self, tensors):
+        self.tensors = tensors if isinstance(tensors, list) else [tensors]
 
     def sum(self):
         return self
 
     def backward(self):
-        self.x.grad = _FakeValue()
+        for tensor in self.tensors:
+            tensor.grad = _FakeValue()
 
 
 def test_validate_oeq_detaches_y_and_w_for_gradient_validation(monkeypatch):
@@ -129,12 +131,16 @@ def test_validate_oeq_detaches_y_and_w_for_gradient_validation(monkeypatch):
 
     calls = {}
 
-    def fake_grad(*args):
+    def fake_grads(*args):
         calls["grad_ref_y"] = args[2]
         calls["grad_ref_w"] = args[3]
-        return _FakeValue()
+        return {
+            "x": _FakeValue(),
+            "y": _FakeValue(),
+            "w": _FakeValue(),
+        }
 
-    monkeypatch.setattr(validation, "e3nn_grad_chunked", fake_grad)
+    monkeypatch.setattr(validation, "e3nn_grads_chunked", fake_grads)
 
     class PassingConv:
         def __init__(self):
@@ -143,9 +149,10 @@ def test_validate_oeq_detaches_y_and_w_for_gradient_validation(monkeypatch):
         def forward(self, X, Y, W, rows, cols):
             self.calls.append((X, Y, W, rows, cols))
             if len(self.calls) == 4:
+                calls["oeq_grad_x"] = X
                 calls["oeq_grad_y"] = Y
                 calls["oeq_grad_w"] = W
-                return _BackwardValue(X)
+                return _BackwardValue([X, Y, W])
             return _FakeValue()
 
     y = _TrackTensor("Y")
@@ -162,8 +169,12 @@ def test_validate_oeq_detaches_y_and_w_for_gradient_validation(monkeypatch):
     )
 
     assert result["grad_ok"] is True
+    assert result["grad_x_ok"] is True
+    assert result["grad_y_ok"] is True
+    assert result["grad_w_ok"] is True
     assert calls["grad_ref_y"].detached is True
     assert calls["grad_ref_w"].detached is True
+    assert calls["oeq_grad_x"].detached is True
     assert calls["oeq_grad_y"].detached is True
     assert calls["oeq_grad_w"].detached is True
     assert y.detached is False

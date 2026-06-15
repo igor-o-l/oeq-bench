@@ -45,6 +45,9 @@ def test_config_from_namespace_translates_cli_aliases():
             "bw_peak_gbs": 896.0,
             "block_size": 256,
             "l1_carveout": 0,
+            "oeq_load_strategy": "vectorized",
+            "oeq_schedule_strategy": "persistent",
+            "edge_ordering": "dst-src",
         },
     )()
     cfg = BenchConfig.from_args(ns)
@@ -58,6 +61,9 @@ def test_config_from_namespace_translates_cli_aliases():
     assert cfg.skip_runtime_check is True
     assert cfg.out == Path("/tmp/spec3.json")
     assert cfg.l1_carveout == 0
+    assert cfg.oeq_load_strategy == "vectorized"
+    assert cfg.oeq_schedule_strategy == "persistent"
+    assert cfg.edge_ordering == "dst-src"
 
 
 def test_main_dry_run_prints_config_and_returns_zero(capsys):
@@ -84,6 +90,9 @@ def test_main_ncu_dry_run_prints_config_and_returns_zero(capsys):
         ({"rtol": -1e-4}, "rtol"),
         ({"atol": -1e-4}, "atol"),
         ({"bw_peak_gbs": 0.0}, "bw_peak_gbs"),
+        ({"oeq_load_strategy": "float4"}, "oeq_load_strategy"),
+        ({"oeq_schedule_strategy": "case2"}, "oeq_schedule_strategy"),
+        ({"edge_ordering": "degree"}, "edge_ordering"),
     ],
 )
 def test_config_rejects_invalid_public_numeric_fields(kwargs, match):

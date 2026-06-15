@@ -41,12 +41,12 @@ def build_e3nn_tp(cfg):
     return tp.to(cfg.device)
 
 
-def make_graph_data(cfg, weight_numel: int, seed: int = 42):
+def make_graph_data(cfg, weight_numel: int, seed: int | None = None):
     from e3nn.o3 import Irreps
 
     if torch is None:
         raise ModuleNotFoundError("torch")
-    torch.manual_seed(seed)
+    torch.manual_seed(cfg.seed if seed is None else seed)
     irreps_in1 = Irreps(cfg.irreps_in1)
     irreps_in2 = Irreps(cfg.irreps_in2)
     dtype = _torch_dtype(cfg.dtype)
@@ -55,6 +55,18 @@ def make_graph_data(cfg, weight_numel: int, seed: int = 42):
     W = torch.randn(cfg.num_edges, weight_numel, dtype=dtype, device=cfg.device)
     src = torch.randint(0, cfg.num_nodes, (cfg.num_edges,), dtype=torch.int64, device=cfg.device)
     dst = torch.randint(0, cfg.num_nodes, (cfg.num_edges,), dtype=torch.int64, device=cfg.device)
+    if cfg.edge_ordering != "random":
+        if cfg.edge_ordering == "dst-src":
+            key = dst * cfg.num_nodes + src
+        elif cfg.edge_ordering == "src-dst":
+            key = src * cfg.num_nodes + dst
+        else:
+            raise ValueError(f"unsupported edge_ordering: {cfg.edge_ordering}")
+        perm = torch.argsort(key)
+        Y = Y[perm].contiguous()
+        W = W[perm].contiguous()
+        src = src[perm].contiguous()
+        dst = dst[perm].contiguous()
     return X, Y, W, src, dst
 
 
@@ -75,10 +87,17 @@ def e3nn_scatter(tp, X, Y, W, src, dst, num_nodes, chunk=0):
 def e3nn_grad_chunked(tp, X, Y, W, src, dst, chunk=0):
     """dL/dX for L = sum(Z), tiled so each chunk's autograd graph is freed before the next
     (bounded memory at paper scale; autograd accumulates per-chunk grads into X.grad)."""
+    return e3nn_grads_chunked(tp, X, Y, W, src, dst, chunk)["x"]
+
+
+def e3nn_grads_chunked(tp, X, Y, W, src, dst, chunk=0):
+    """dL/d(X,Y,W) for L = sum(Z), tiled over edges for bounded reference memory."""
     Xg = X.detach().clone().requires_grad_(True)
+    Yg = Y.detach().clone().requires_grad_(True)
+    Wg = W.detach().clone().requires_grad_(True)
     E = src.shape[0]
     step = chunk if chunk and chunk > 0 else E
     for s in range(0, E, step):
         e = min(s + step, E)
-        tp(Xg[src[s:e]], Y[s:e], W[s:e]).sum().backward()
-    return Xg.grad
+        tp(Xg[src[s:e]], Yg[s:e], Wg[s:e]).sum().backward()
+    return {"x": Xg.grad, "y": Yg.grad, "w": Wg.grad}

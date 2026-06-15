@@ -12,6 +12,7 @@ class BenchConfig:
     num_nodes: int = 12500
     num_edges: int = 200000
     chunk_edges: int = 16384
+    seed: int = 42
     backend: str = "oeq"
     validate: bool = False
     profile: str = "cuda-events"
@@ -25,6 +26,9 @@ class BenchConfig:
     bw_peak_gbs: float = 896.0
     block_size: int = 128
     l1_carveout: int | None = None
+    oeq_load_strategy: str = "scalar"
+    oeq_schedule_strategy: str = "default"
+    edge_ordering: str = "random"
     dtype: str = "float32"
     device: str = "cuda"
 
@@ -39,12 +43,22 @@ class BenchConfig:
             raise ValueError("num_nodes and num_edges must be positive")
         if self.chunk_edges < 0:
             raise ValueError("chunk_edges must be non-negative")
+        if self.seed < 0:
+            raise ValueError("seed must be non-negative")
         if self.warmup < 0 or self.repeats <= 0:
             raise ValueError("warmup must be non-negative and repeats must be positive")
         if self.block_size not in {128, 256, 512}:
             raise ValueError("block_size must be one of 128, 256, or 512")
         if self.l1_carveout is not None and not 0 <= self.l1_carveout <= 100:
             raise ValueError("l1_carveout must be between 0 and 100")
+        if self.oeq_load_strategy not in {"scalar", "vectorized"}:
+            raise ValueError("oeq_load_strategy must be one of scalar or vectorized")
+        if self.oeq_schedule_strategy not in {"default", "persistent"}:
+            raise ValueError(
+                "oeq_schedule_strategy must be one of default or persistent"
+            )
+        if self.edge_ordering not in {"random", "dst-src", "src-dst"}:
+            raise ValueError("edge_ordering must be one of random, dst-src, or src-dst")
         if self.rtol < 0:
             raise ValueError("rtol must be non-negative")
         if self.atol < 0:
@@ -62,6 +76,7 @@ class BenchConfig:
             num_nodes=args.num_nodes,
             num_edges=args.num_edges,
             chunk_edges=args.chunk_edges,
+            seed=getattr(args, "seed", cls.seed),
             backend=args.backend,
             validate=args.validate,
             profile=args.profile,
@@ -75,6 +90,9 @@ class BenchConfig:
             bw_peak_gbs=args.bw_peak_gbs,
             block_size=args.block_size,
             l1_carveout=args.l1_carveout,
+            oeq_load_strategy=args.oeq_load_strategy,
+            oeq_schedule_strategy=args.oeq_schedule_strategy,
+            edge_ordering=args.edge_ordering,
         )
 
     def backends_to_run(self) -> list[str]:

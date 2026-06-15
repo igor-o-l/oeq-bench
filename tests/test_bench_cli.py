@@ -32,7 +32,16 @@ def test_json_schema_helper_contains_spec_keys(tmp_path, monkeypatch):
     out = tmp_path / "results.json"
     assert main(["--out", str(out)]) == 0
     payload = json.loads(out.read_text())
-    assert {"device", "versions", "config", "results", "validation", "runtime_check", "kernel_config"} <= set(payload)
+    assert {
+        "device",
+        "versions",
+        "config",
+        "results",
+        "profiled_results",
+        "validation",
+        "runtime_check",
+        "kernel_config",
+    } <= set(payload)
 
 
 def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp_path, monkeypatch):
@@ -81,7 +90,9 @@ def test_ncu_profile_executes_ncu_and_merges_metrics_without_importing_torch(tmp
     assert output_stem == tmp_path / "profile"
     assert command[:4] == ["ncu", "--set", "full", "--target-processes"]
     assert parse_calls == [(str(tmp_path / "profile.ncu-rep"), {})]
-    assert payload["results"]["oeq"] == {"ms": 1.25}
+    assert payload["results"] == {}
+    assert payload["profiled_results"]["oeq"] == {"ms": 1.25}
+    assert payload["profiled_results"]["ncu_overhead"] is True
     assert payload["versions"] == {"torch": "fake"}
     assert payload["ncu"]["oeq"]["dram_throughput_pct"] == 67.4
     assert payload["ncu"]["oeq"]["report_path"] == str(tmp_path / "profile.ncu-rep")
@@ -118,8 +129,10 @@ def test_ncu_profile_both_backends_uses_distinct_reports(tmp_path, monkeypatch):
     payload = bench.run_benchmark(BenchConfig(profile="ncu", backend="both", out=out))
 
     assert calls == [("oeq", tmp_path / "profile_oeq"), ("cueq", tmp_path / "profile_cueq")]
-    assert payload["results"]["oeq"] == {"ms": 1.0}
-    assert payload["results"]["cueq"] == {"ms": 2.0}
+    assert payload["results"] == {}
+    assert payload["profiled_results"]["oeq"] == {"ms": 1.0}
+    assert payload["profiled_results"]["cueq"] == {"ms": 2.0}
+    assert payload["profiled_results"]["ncu_overhead"] is True
     assert payload["ncu"]["oeq"]["report_path"] == str(tmp_path / "profile_oeq.ncu-rep")
     assert payload["ncu"]["cueq"]["report_path"] == str(tmp_path / "profile_cueq.ncu-rep")
     assert payload["ncu"]["cueq"]["used_sudo"] is True
