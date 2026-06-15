@@ -53,6 +53,13 @@ def build_tuning_report(architecture: str, device: str, configs: list[dict]) -> 
             "l1_carveout": None,
             "effective": False,
         }
+    if winner.get("requested_l1_carveout_effective") is False:
+        report["fastest_request"] = dict(report["recommended"])
+        report["recommended"] = {
+            "block_size": None,
+            "l1_carveout": None,
+            "effective": False,
+        }
     return report
 
 
@@ -63,7 +70,7 @@ def ncu_child_json_path(output_stem: Path) -> Path:
 
 def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
     output_stem = Path(output_stem)
-    return [
+    command = [
         "ncu",
         "--set",
         "full",
@@ -96,6 +103,9 @@ def build_ncu_command(cfg, backend: str, output_stem: Path) -> list[str]:
         "--out",
         str(ncu_child_json_path(output_stem)),
     ]
+    if cfg.l1_carveout is not None:
+        command.extend(["--l1-carveout", str(cfg.l1_carveout)])
+    return command
 
 
 def _max_numeric_metrics(rows: list[dict], fieldnames: list[str] | None) -> dict[str, float]:
@@ -294,6 +304,8 @@ def run_single(**kwargs) -> int:
         "--out",
         str(kwargs.get("out", "oeq_bench_results.json")),
     ]
+    if kwargs.get("l1_carveout") is not None:
+        args.extend(["--l1-carveout", str(kwargs["l1_carveout"])])
     return main(args)
 
 
@@ -308,6 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeats", type=int, required=True)
     parser.add_argument("--warmup", type=int, default=0)
     parser.add_argument("--block-size", type=int, default=128)
+    parser.add_argument("--l1-carveout", type=int)
     parser.add_argument("--out", required=True)
     args = parser.parse_args(argv)
     return run_single(
@@ -320,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         repeats=args.repeats,
         warmup=args.warmup,
         block_size=args.block_size,
+        l1_carveout=args.l1_carveout,
         out=args.out,
     )
 

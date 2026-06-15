@@ -15,7 +15,7 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 # install the kernels into your existing CUDA torch env, not via this package:
-#   pip install openequivariance        (needs CXXFLAGS="-include cstdint" on GCC>=14)
+#   pixi install -e mlip               (installs the local OpenEquivariance fork)
 #   pip install cuequivariance-torch    (pure-python 0.10.x; verified on sm_120)
 dev = ["pytest"]
 

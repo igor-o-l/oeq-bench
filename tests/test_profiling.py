@@ -22,7 +22,14 @@ def test_build_ncu_command_contains_profile_target():
     assert "--backend oeq" in " ".join(cmd)
     assert "--warmup 0" in " ".join(cmd)
     assert "--block-size 128" in " ".join(cmd)
+    assert "--l1-carveout" not in cmd
     assert "--out /tmp/oeq_profile_bench.json" in " ".join(cmd)
+
+
+def test_build_ncu_command_contains_l1_carveout_when_requested():
+    cfg = BenchConfig(num_edges=8192, warmup=0, repeats=1, block_size=128, l1_carveout=0)
+    cmd = build_ncu_command(cfg, backend="oeq", output_stem=Path("/tmp/oeq_profile"))
+    assert "--l1-carveout 0" in " ".join(cmd)
 
 
 def test_ncu_child_json_path_is_separate_from_parent_output():
@@ -148,6 +155,45 @@ def test_run_single_and_main_propagate_bench_exit_code(monkeypatch):
         out="/tmp/profile.json",
     ) == 17
     assert calls[-1] == expected
+
+    assert run_single(
+        backend="oeq",
+        irreps="16x0e",
+        irreps_sh="0e+1o",
+        num_nodes=128,
+        num_edges=512,
+        chunk_edges=64,
+        repeats=3,
+        warmup=0,
+        block_size=512,
+        l1_carveout=0,
+        out="/tmp/profile.json",
+    ) == 17
+    assert calls[-1] == [
+        "--backend",
+        "oeq",
+        "--irreps",
+        "16x0e",
+        "--irreps-sh",
+        "0e+1o",
+        "--num-nodes",
+        "128",
+        "--num-edges",
+        "512",
+        "--chunk-edges",
+        "64",
+        "--repeats",
+        "3",
+        "--warmup",
+        "0",
+        "--block-size",
+        "512",
+        "--skip-runtime-check",
+        "--out",
+        "/tmp/profile.json",
+        "--l1-carveout",
+        "0",
+    ]
 
     assert main(
         [

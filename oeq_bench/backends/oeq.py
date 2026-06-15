@@ -19,17 +19,22 @@ def build_oeq_conv(cfg):
         shared_weights=False,
         internal_weights=False,
     )
-    if "block_size" not in inspect.signature(oeq.TensorProductConv).parameters:
+    required_params = {"block_size", "l1_carveout"}
+    missing_params = required_params - set(inspect.signature(oeq.TensorProductConv).parameters)
+    if missing_params:
         version = getattr(oeq, "__version__", "unknown")
         raise RuntimeError(
-            "oeq-bench block-size tuning requires an OpenEquivariance build whose "
-            f"TensorProductConv constructor accepts block_size; found version {version!r}. "
+            "oeq-bench tuning requires an OpenEquivariance build whose "
+            "TensorProductConv constructor accepts "
+            f"{', '.join(sorted(required_params))}; missing {', '.join(sorted(missing_params))}. "
+            f"Found version {version!r}. "
             "Install the MLIPs external/OpenEquivariance fork or use a compatible OEQ release."
         )
     conv = oeq.TensorProductConv(
         problem,
         deterministic=False,
         block_size=cfg.block_size,
+        l1_carveout=cfg.l1_carveout,
     )
     return problem, conv
 
@@ -49,9 +54,16 @@ def _launch_config_dict(schedule) -> dict:
 
 def describe_oeq_kernel(conv, cfg) -> dict:
     forward = _launch_config_dict(conv.forward_schedule)
+    actual_l1_carveout = conv.kernel_prop.get("l1_carveout", -1)
+    actual_l1_carveout = None if actual_l1_carveout == -1 else int(actual_l1_carveout)
     return {
         "requested_block_size": cfg.block_size,
         "requested_block_size_effective": forward["num_threads"] == cfg.block_size,
+        "requested_l1_carveout": cfg.l1_carveout,
+        "requested_l1_carveout_effective": None
+        if cfg.l1_carveout is None
+        else actual_l1_carveout == cfg.l1_carveout,
+        "actual_l1_carveout": actual_l1_carveout,
         "forward": forward,
         "kernel_hash": conv.hash,
     }

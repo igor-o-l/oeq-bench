@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--atol", type=float, default=BenchConfig.atol)
     ap.add_argument("--bw-peak-gbs", type=float, default=BenchConfig.bw_peak_gbs)
     ap.add_argument("--block-size", type=int, choices=[128, 256, 512], default=BenchConfig.block_size)
+    ap.add_argument("--l1-carveout", type=int, default=BenchConfig.l1_carveout)
     return ap
 
 
@@ -70,6 +71,7 @@ def empty_result_payload(cfg: BenchConfig) -> dict:
             "num_edges": cfg.num_edges,
             "chunk_edges": cfg.chunk_edges,
             "block_size": cfg.block_size,
+            "l1_carveout": cfg.l1_carveout,
         },
         "results": {},
         "validation": {},
@@ -109,7 +111,10 @@ def _is_ncu_permission_error(exc: subprocess.CalledProcessError) -> bool:
 
 
 def _sudo_command(command: list[str]) -> list[str]:
-    preserve_env = "PATH,LD_LIBRARY_PATH,PYTHONPATH,TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD,CUDA_HOME,CXXFLAGS"
+    preserve_env = (
+        "PATH,LD_LIBRARY_PATH,PYTHONPATH,TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD,"
+        "CUDA_HOME,CXXFLAGS,OEQ_JIT_EXTENSION,TORCH_EXTENSIONS_DIR"
+    )
     elevated_command = list(command)
     if elevated_command and elevated_command[0] == "ncu":
         elevated_command[0] = shutil.which("ncu") or elevated_command[0]

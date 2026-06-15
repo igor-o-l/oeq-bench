@@ -194,6 +194,8 @@ def test_run_ncu_command_retries_permission_failure_with_sudo(tmp_path, monkeypa
 
     assert calls[0][0] == "ncu"
     assert calls[1][:2] == ["sudo", "-n"]
+    assert any("OEQ_JIT_EXTENSION" in part for part in calls[1])
+    assert any("TORCH_EXTENSIONS_DIR" in part for part in calls[1])
     assert "/usr/local/cuda/bin/ncu" in calls[1]
     assert calls[2][:3] == ["sudo", "-n", "chown"]
     assert str(tmp_path / "profile.ncu-rep") in calls[2]

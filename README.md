@@ -26,14 +26,16 @@ oeq-bench --irreps "128x0e+128x1o+128x2e" --num-edges 200000 --chunk-edges 16384
 
 ## OpenEquivariance on GCC 14 / CUDA 13
 
-OEQ 0.6.x vendors `json11`, which can fail under GCC 14 because `uint8_t` is used without an explicit `<cstdint>` include. Use the installer wrapper in the target env:
+The MLIPs OpenEquivariance fork vendors the `json11` `<cstdint>` include needed by GCC 14 and exposes
+the sm_120 launch knobs used by this benchmark. Install the forked submodule into the target env:
 
 ```bash
-cd external/oeq-bench
-pixi run -e mlip bash scripts/install_oeq.sh
+pixi install -e mlip
+pixi run -e mlip python -c "import openequivariance as oeq; print(oeq.__version__)"
 ```
 
-The wrapper only sets `CXXFLAGS="-include cstdint"` for the build and then imports `openequivariance` to verify the install. The root `pixi.toml` also sets this activation variable for the Linux `mlip` env.
+For one-off experiments against an upstream OEQ 0.6.x source tree, the old workaround was
+`CXXFLAGS="-include cstdint"`, but that is no longer required for the local fork.
 
 ## cuEquivariance
 
@@ -50,9 +52,11 @@ channelwise tensor-product `SegmentedPolynomial`. The OEQ backend remains the de
 cuEq's graph scatter path is validated against the same e3nn oracle.
 
 ## Status
-On rog (sm_120): the local OpenEquivariance fork beat chunked-e3nn 14.5× @ 200K edges under e3nn 0.6.0, fwd+grad validated.
+On rog (sm_120): the local OpenEquivariance fork beat chunked-e3nn 14.3× @ 200K edges under e3nn 0.6.0, fwd+grad validated.
+`TensorProductConv(block_size=..., l1_carveout=...)` is wired through to the generated CUDA launch path;
+`block_size=128` is the stable recommendation and explicit carveout did not show a reproducible gain.
 cuEquivariance has a smoke wrapper and channelwise tensor-product constructor, but not yet the decision-grade
-graph scatter benchmark. TODO: OEQ GCC14/CUDA13 build-fix PR (`-include cstdint`), targeted Nsight kernel filters,
+graph scatter benchmark. TODO: upstream OEQ GCC14/CUDA13 build-fix PR, targeted Nsight kernel filters,
 publish per-arch numbers. Submit to OpenEquivariance (build/CI) + ACEsuit/mace (fused path docs).
 
 ## Spec 3 Verification (2026-06-14)

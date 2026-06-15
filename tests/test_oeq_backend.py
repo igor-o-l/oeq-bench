@@ -33,21 +33,23 @@ def test_build_oeq_conv_passes_requested_block_size(monkeypatch):
             self.kwargs = kwargs
 
     class FakeTensorProductConv:
-        def __init__(self, problem, *, deterministic, block_size):
+        def __init__(self, problem, *, deterministic, block_size, l1_carveout):
             calls["problem"] = problem
             calls["deterministic"] = deterministic
             calls["block_size"] = block_size
+            calls["l1_carveout"] = l1_carveout
 
     fake_oeq.TPProblem = FakeTPProblem
     fake_oeq.TensorProductConv = FakeTensorProductConv
     monkeypatch.setitem(sys.modules, "openequivariance", fake_oeq)
     monkeypatch.setattr(oeq_backend, "build_instructions", lambda *args: [])
 
-    build_oeq_conv(BenchConfig(block_size=128))
+    build_oeq_conv(BenchConfig(block_size=128, l1_carveout=0))
 
     assert isinstance(calls["problem"], FakeTPProblem)
     assert calls["deterministic"] is False
     assert calls["block_size"] == 128
+    assert calls["l1_carveout"] == 0
 
 
 def test_build_oeq_conv_requires_block_size_capable_oeq(monkeypatch):
@@ -59,7 +61,7 @@ def test_build_oeq_conv_requires_block_size_capable_oeq(monkeypatch):
             pass
 
     class FakeTensorProductConv:
-        def __init__(self, problem, *, deterministic):
+        def __init__(self, problem, *, deterministic, block_size):
             pass
 
     fake_oeq.TPProblem = FakeTPProblem
@@ -68,14 +70,15 @@ def test_build_oeq_conv_requires_block_size_capable_oeq(monkeypatch):
     monkeypatch.setitem(sys.modules, "openequivariance", fake_oeq)
     monkeypatch.setattr(oeq_backend, "build_instructions", lambda *args: [])
 
-    with pytest.raises(RuntimeError, match="requires .*block_size"):
+    with pytest.raises(RuntimeError, match="requires .*l1_carveout"):
         build_oeq_conv(BenchConfig(block_size=128))
 
 
 def test_describe_oeq_kernel_reports_actual_forward_launch_config():
-    cfg = BenchConfig(block_size=512)
+    cfg = BenchConfig(block_size=512, l1_carveout=0)
     conv = SimpleNamespace(
         hash=123,
+        kernel_prop={"l1_carveout": 0},
         forward_schedule=SimpleNamespace(
             launch_config=SimpleNamespace(
                 num_blocks=84,
@@ -89,6 +92,9 @@ def test_describe_oeq_kernel_reports_actual_forward_launch_config():
     assert describe_oeq_kernel(conv, cfg) == {
         "requested_block_size": 512,
         "requested_block_size_effective": False,
+        "requested_l1_carveout": 0,
+        "requested_l1_carveout_effective": True,
+        "actual_l1_carveout": 0,
         "forward": {
             "num_blocks": 84,
             "num_threads": 192,
@@ -104,6 +110,7 @@ def test_describe_oeq_kernel_marks_requested_block_size_effective():
     cfg = BenchConfig(block_size=128)
     conv = SimpleNamespace(
         hash=123,
+        kernel_prop={"l1_carveout": -1},
         forward_schedule=SimpleNamespace(
             launch_config=SimpleNamespace(
                 num_blocks=84,

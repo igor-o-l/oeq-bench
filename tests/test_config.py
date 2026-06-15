@@ -19,6 +19,7 @@ def test_default_config_matches_spec3_shape():
     assert cfg.profile == "cuda-events"
     assert cfg.out == Path("oeq_bench_results.json")
     assert cfg.block_size == 128
+    assert cfg.l1_carveout is None
 
 
 def test_config_from_namespace_translates_cli_aliases():
@@ -43,6 +44,7 @@ def test_config_from_namespace_translates_cli_aliases():
             "atol": 1e-4,
             "bw_peak_gbs": 896.0,
             "block_size": 256,
+            "l1_carveout": 0,
         },
     )()
     cfg = BenchConfig.from_args(ns)
@@ -55,6 +57,7 @@ def test_config_from_namespace_translates_cli_aliases():
     assert cfg.dry_run is True
     assert cfg.skip_runtime_check is True
     assert cfg.out == Path("/tmp/spec3.json")
+    assert cfg.l1_carveout == 0
 
 
 def test_main_dry_run_prints_config_and_returns_zero(capsys):
@@ -76,6 +79,8 @@ def test_main_ncu_dry_run_prints_config_and_returns_zero(capsys):
     ("kwargs", "match"),
     [
         ({"block_size": 64}, "block_size"),
+        ({"l1_carveout": -1}, "l1_carveout"),
+        ({"l1_carveout": 101}, "l1_carveout"),
         ({"rtol": -1e-4}, "rtol"),
         ({"atol": -1e-4}, "atol"),
         ({"bw_peak_gbs": 0.0}, "bw_peak_gbs"),
